@@ -61,11 +61,29 @@ multi-outcome rounding, not free money.
 This package was written in an environment where `*.polymarket.com` is blocked
 by the network egress proxy, so **no call in it has been made against a live
 server.** Rather than hide that, provenance is recorded per endpoint in
-`endpoints.py`:
+`endpoints.py`, weakest to strongest:
 
+- `recall` — believed correct, never confirmed against anything
 - `documented` — from Polymarket's published API overview (the base URLs)
-- `recall` — believed correct, never confirmed (every path and parameter)
-- `verified` — confirmed by a `doctor` run
+- `client` — matches Polymarket's official `py-clob-client` source, read from
+  PyPI 0.34.6 on 2026-08-24. PyPI is reachable from environments that block
+  polymarket.com, which makes their own client a usable second-best source:
+  the path spelling is theirs, not ours. It is still their code and not a live
+  response, so a path could in principle be deprecated server-side.
+- `verified` — confirmed by a `doctor` run against the live API
+
+Current split: **15 `client`, 14 `recall`, 0 `verified`.** All 15 CLOB paths are
+cross-checked. Gamma and Data are not — the official client is CLOB-only, so
+every Gamma and Data path remains recall, as does `/prices-history`, which does
+not appear in their client at all.
+
+What that cross-check already corrected: paginated CLOB reads must send
+`next_cursor=MA==` (base64 `0`) on the *first* request. Omitting the parameter
+is not the same request as starting at zero, and this client used to omit it.
+It also confirmed `LTE=` as the end sentinel, `/` as the health check, and
+turned up seven endpoints that were missing here — `/time`,
+`/last-trade-price`, `/tick-size`, `/neg-risk`, `/sampling-simplified-markets`,
+and the batch `POST /prices` and `/spreads`.
 
 To check the whole catalog from a machine with network access:
 
@@ -78,7 +96,10 @@ Promote anything that answers to `confidence="verified"` and note the date
 here. A blocked network and a wrong path look identical in that output — rule
 out reachability before editing paths.
 
-Last `doctor` run: **never** (network blocked at time of writing, 2026-08-24).
+Last `doctor` run: **never** — the network is blocked wherever this has been
+edited so far. That is the one gap the cross-check above cannot close: it
+confirms the paths Polymarket's own code uses, not that the server still
+answers them today.
 
 ---
 

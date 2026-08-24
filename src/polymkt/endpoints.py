@@ -9,9 +9,13 @@ Rather than pretend otherwise, every entry carries its provenance, and
 answers. Once a run confirms an entry, promote its `confidence` to
 "verified" and note the date in docs/POLYMARKET.md.
 
-Legend for `confidence`:
+Legend for `confidence`, weakest to strongest:
+  recall     — believed correct, never confirmed against anything
   documented — taken from Polymarket's own published API overview
-  recall     — believed correct, never confirmed against a live response
+  client     — matches Polymarket's official py-clob-client source, read
+               from PyPI 0.34.6 on 2026-08-24. Their spelling, not mine —
+               but still their code, not a live response, so a path could
+               in principle be deprecated server-side.
   verified   — confirmed by a `doctor` run against the live API
 """
 
@@ -32,6 +36,11 @@ SERVICES: dict[str, str] = {
 
 # Realtime streams. Not used by this package yet — the stdlib has no
 # WebSocket client, and writing one is a bigger commitment than it looks.
+# Pagination sentinels, from the official client's constants. A paginated
+# read starts at FIRST_CURSOR — omitting it is not the same request.
+FIRST_CURSOR = "MA=="   # base64 "0"
+END_CURSOR = "LTE="     # base64 "-1", the server saying "no more pages"
+
 WEBSOCKETS: dict[str, str] = {
     "market": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
     "user": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
@@ -95,36 +104,61 @@ CATALOG: tuple[Endpoint, ...] = (
        probe={"q": "election", "limit_per_type": 1}),
 
     # ----------------------------------------------------------- clob
-    _e("clob.ok", "clob", "GET", "/", "Health check.", probe={}),
+    # Every path below marked "client" was read out of Polymarket's own
+    # py-clob-client 0.34.6 source, so the spelling is theirs, not mine.
+    _e("clob.ok", "clob", "GET", "/", "Health check.",
+       probe={}, confidence="client"),
+    _e("clob.time", "clob", "GET", "/time",
+       "Server time. The cheapest possible reachability check.",
+       probe={}, confidence="client"),
     _e("clob.markets", "clob", "GET", "/markets",
        "Paginated market list, keyed by condition id.",
-       params=("next_cursor",), probe={}),
+       params=("next_cursor",), probe={"next_cursor": FIRST_CURSOR},
+       confidence="client"),
     _e("clob.market", "clob", "GET", "/markets/{condition_id}",
        "One market's CLOB view, including its outcome token ids.",
-       needs="condition_id"),
+       needs="condition_id", confidence="client"),
     _e("clob.simplified_markets", "clob", "GET", "/simplified-markets",
        "Market list trimmed to the fields a trading UI needs.",
-       params=("next_cursor",), probe={}),
+       params=("next_cursor",), probe={"next_cursor": FIRST_CURSOR},
+       confidence="client"),
     _e("clob.sampling_markets", "clob", "GET", "/sampling-markets",
        "Markets that currently carry liquidity rewards.",
-       params=("next_cursor",), probe={}),
+       params=("next_cursor",), probe={"next_cursor": FIRST_CURSOR},
+       confidence="client"),
+    _e("clob.sampling_simplified_markets", "clob", "GET",
+       "/sampling-simplified-markets",
+       "Reward-bearing markets, trimmed.",
+       params=("next_cursor",), probe={"next_cursor": FIRST_CURSOR},
+       confidence="client"),
     _e("clob.book", "clob", "GET", "/book",
        "Full order book for one outcome token.",
-       params=("token_id",), needs="token_id"),
+       params=("token_id",), needs="token_id", confidence="client"),
     _e("clob.books", "clob", "POST", "/books",
-       "Order books for many tokens in one call.", needs="token_id"),
+       "Order books for many tokens at once. Body is a list of "
+       "{token_id, side}.", needs="token_id", confidence="client"),
     _e("clob.price", "clob", "GET", "/price",
        "Best price on one side of the book.",
-       params=("token_id", "side"), needs="token_id"),
+       params=("token_id", "side"), needs="token_id", confidence="client"),
     _e("clob.midpoint", "clob", "GET", "/midpoint",
        "Midpoint between best bid and best ask — the usual 'probability'.",
-       params=("token_id",), needs="token_id"),
+       params=("token_id",), needs="token_id", confidence="client"),
     _e("clob.spread", "clob", "GET", "/spread",
        "Bid/ask spread for one token.",
-       params=("token_id",), needs="token_id"),
+       params=("token_id",), needs="token_id", confidence="client"),
+    _e("clob.last_trade_price", "clob", "GET", "/last-trade-price",
+       "Price of the most recent trade — what the book last agreed on.",
+       params=("token_id",), needs="token_id", confidence="client"),
+    _e("clob.tick_size", "clob", "GET", "/tick-size",
+       "Minimum price increment; an off-tick order is rejected.",
+       params=("token_id",), needs="token_id", confidence="client"),
+    _e("clob.neg_risk", "clob", "GET", "/neg-risk",
+       "Whether a market is neg-risk (multi-outcome, mutually exclusive).",
+       params=("token_id",), needs="token_id", confidence="client"),
     _e("clob.prices_history", "clob", "GET", "/prices-history",
-       "Historical price series. Note the param is `market`, but it takes "
-       "a TOKEN id, not a condition id.",
+       "Historical price series. The param is named `market` but takes a "
+       "TOKEN id. Absent from the official client, so unlike its neighbours "
+       "this one is still pure recall.",
        params=("market", "interval", "startTs", "endTs", "fidelity"),
        needs="token_id"),
 

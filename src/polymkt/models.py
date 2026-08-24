@@ -218,6 +218,13 @@ class Book:
     token_id: str
     bids: list[Level] = field(default_factory=list)
     asks: list[Level] = field(default_factory=list)
+    # The live response carries these alongside the levels. tick_size in
+    # particular is not decoration: it is the granularity every price on
+    # this book is quantised to.
+    tick_size: float | None = None
+    min_order_size: float | None = None
+    last_trade_price: float | None = None
+    neg_risk: bool = False
     raw: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -235,6 +242,10 @@ class Book:
             token_id=str(_first(payload, "asset_id", "token_id", default="")),
             bids=sorted(levels("bids"), key=lambda l: l.price, reverse=True),
             asks=sorted(levels("asks"), key=lambda l: l.price),
+            tick_size=as_float(payload.get("tick_size")),
+            min_order_size=as_float(payload.get("min_order_size")),
+            last_trade_price=as_float(payload.get("last_trade_price")),
+            neg_risk=as_bool(payload.get("neg_risk", False)),
             raw=payload,
         )
 

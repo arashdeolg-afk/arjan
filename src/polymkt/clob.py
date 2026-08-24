@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .endpoints import SERVICES
+from .endpoints import END_CURSOR, FIRST_CURSOR, SERVICES
 from .http import Client, Transport, urllib_transport
 from .models import Book, Market, as_float
 
@@ -39,13 +39,18 @@ class Clob:
     def markets(self, *, next_cursor: str | None = None) -> tuple[list[Market], str | None]:
         """One page of markets plus the cursor for the next one.
 
-        The CLOB paginates by cursor and signals the end with 'LTE='
-        (base64 for a past-the-end offset), which is returned as None.
+        The cursor is always sent, defaulting to FIRST_CURSOR ("MA==",
+        base64 "0"). Omitting it is not the same request as starting at
+        zero — the official client passes it on every paginated call.
+
+        The end of the sequence is END_CURSOR ("LTE=", base64 "-1"), which
+        is translated to None so callers can loop `while cursor:`.
         """
-        payload = self.client.get("/markets", next_cursor=next_cursor) or {}
+        payload = self.client.get(
+            "/markets", next_cursor=next_cursor or FIRST_CURSOR) or {}
         rows = payload.get("data", []) if isinstance(payload, dict) else payload
         cursor = payload.get("next_cursor") if isinstance(payload, dict) else None
-        if cursor in ("LTE=", "", None):
+        if cursor in (END_CURSOR, "", None):
             cursor = None
         return [Market.from_clob(m) for m in rows or []], cursor
 
@@ -83,6 +88,24 @@ class Clob:
             "bid_depth": sum(l.price * l.size for l in book.bids),
             "ask_depth": sum(l.price * l.size for l in book.asks),
         }
+
+    def last_trade_price(self, token_id: str) -> float | None:
+        """What the book last actually agreed on.
+
+        On a thin market the midpoint can sit far from any real trade;
+        this is the last price two people genuinely met at.
+        """
+        payload = self.client.get("/last-trade-price", token_id=token_id) or {}
+        if isinstance(payload, dict):
+            return as_float(payload.get("price"))
+        return as_float(payload)
+
+    def tick_size(self, token_id: str) -> float | None:
+        """Minimum price increment. An off-tick price is rejected outright."""
+        payload = self.client.get("/tick-size", token_id=token_id) or {}
+        if isinstance(payload, dict):
+            return as_float(payload.get("minimum_tick_size") or payload.get("tick_size"))
+        return as_float(payload)
 
     def history(self, token_id: str, *, interval: str = "1d",
                 fidelity: int | None = None, start_ts: int | None = None,

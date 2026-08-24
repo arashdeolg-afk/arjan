@@ -133,6 +133,22 @@ class TestBook(unittest.TestCase):
         self.assertIsNone(empty.spread)
         self.assertEqual(empty.sweep(100), (None, 0.0))
 
+    def test_book_keeps_the_metadata_the_live_response_carries(self):
+        b = Book.from_clob({
+            "asset_id": "1001", "bids": [], "asks": [],
+            "tick_size": "0.01", "min_order_size": "5",
+            "last_trade_price": "0.57", "neg_risk": True,
+        })
+        self.assertEqual(b.tick_size, 0.01)
+        self.assertEqual(b.min_order_size, 5.0)
+        self.assertEqual(b.last_trade_price, 0.57)
+        self.assertTrue(b.neg_risk)
+
+    def test_book_metadata_is_optional(self):
+        b = Book.from_clob({"asset_id": "x", "bids": [], "asks": []})
+        self.assertIsNone(b.tick_size)
+        self.assertFalse(b.neg_risk)
+
     def test_zero_size_levels_are_dropped(self):
         b = Book.from_clob({"asset_id": "x",
                             "bids": [{"price": "0.5", "size": "0"}], "asks": []})
@@ -243,9 +259,39 @@ class TestClients(unittest.TestCase):
         self.assertEqual(set(rows[0]), {"t", "p"})
 
     def test_clob_markets_treats_the_end_cursor_as_none(self):
-        client = Clob(transport=json_response({"data": [], "next_cursor": "LTE="}))
+        client = Clob(transport=json_response({"data": [], "next_cursor": E.END_CURSOR}))
         _, cursor = client.markets()
         self.assertIsNone(cursor)
+
+    def test_clob_markets_always_sends_a_start_cursor(self):
+        """Omitting next_cursor is not the same request as starting at zero."""
+        seen = []
+
+        def transport(method, url, headers, body):
+            seen.append(url)
+            return 200, {}, b'{"data": [], "next_cursor": "LTE="}'
+
+        Clob(transport=transport).markets()
+        self.assertIn(f"next_cursor={E.FIRST_CURSOR.replace('=', '%3D')}", seen[0])
+
+    def test_clob_markets_honours_an_explicit_cursor(self):
+        seen = []
+
+        def transport(method, url, headers, body):
+            seen.append(url)
+            return 200, {}, b'{"data": [], "next_cursor": "LTE="}'
+
+        Clob(transport=transport).markets(next_cursor="MTAw")
+        self.assertIn("next_cursor=MTAw", seen[0])
+
+    def test_last_trade_price_is_read_from_the_price_field(self):
+        client = Clob(transport=json_response({"price": "0.57"}))
+        self.assertEqual(client.last_trade_price("1001"), 0.57)
+
+    def test_tick_size_accepts_either_field_name(self):
+        self.assertEqual(
+            Clob(transport=json_response({"minimum_tick_size": "0.01"})).tick_size("1"),
+            0.01)
 
     def test_data_positions_and_value(self):
         positions = self.data.positions("0x" + "1" * 40)
@@ -269,8 +315,18 @@ class TestEndpointCatalog(unittest.TestCase):
             self.assertNotIn("{", e.path, e.name)
 
     def test_confidence_is_declared_honestly(self):
+        levels = {"recall", "documented", "client", "verified"}
         for e in E.CATALOG:
-            self.assertIn(e.confidence, {"documented", "recall", "verified"}, e.name)
+            self.assertIn(e.confidence, levels, e.name)
+
+    def test_prices_history_is_not_credited_to_the_official_client(self):
+        """It is absent from py-clob-client, so it must not claim otherwise."""
+        self.assertEqual(E.BY_NAME["clob.prices_history"].confidence, "recall")
+
+    def test_paginated_probes_start_at_the_first_cursor(self):
+        for name in ("clob.markets", "clob.simplified_markets",
+                     "clob.sampling_markets"):
+            self.assertEqual(E.BY_NAME[name].probe, {"next_cursor": E.FIRST_CURSOR})
 
     def test_url_building(self):
         self.assertEqual(
