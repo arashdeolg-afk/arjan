@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
+
+# Local data: your real numbers stay off GitHub
+data/*.db
+data/*.db-journal
+data/*.sqlite3
+out/
+.env
