@@ -314,3 +314,21 @@ class TestSprint(Base):
         lid = self.add("E")
         with self.assertRaises(ValueError):
             self.S.set_stage(self.conn, lid, "vibing")
+
+    def test_csv_import_loads_prospects(self):
+        import csv, tempfile, os as _os
+        from revops.cli import _import_leads
+        path = _os.path.join(self.tmp.name, "p.csv")
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=["name", "handle", "segment", "product"])
+            w.writeheader()
+            w.writerow({"name": "Alpha", "handle": "@a", "segment": "indie-game",
+                        "product": "roguelike"})
+            w.writerow({"name": "Beta", "handle": "@b", "segment": "vtuber", "product": ""})
+            w.writerow({"name": "", "handle": "@skip", "segment": "", "product": ""})
+        n = _import_leads(self.conn, path)
+        self.assertEqual(n, 2, "rows without a name must be skipped")
+        rows = {r["name"]: dict(r) for r in self.conn.execute("SELECT * FROM leads")}
+        self.assertEqual(rows["Alpha"]["segment"], "indie-game")
+        self.assertIsNone(rows["Beta"]["product"], "blank cells become NULL, not ''")
+        self.assertEqual(rows["Alpha"]["stage"], "sourced")

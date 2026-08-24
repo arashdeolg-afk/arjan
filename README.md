@@ -44,6 +44,7 @@ Full plan, targeting, and the actual message copy: **[docs/SPRINT.md](docs/SPRIN
 
 ```bash
 revops sprint --goal 600 --price 200      # computes your daily contact target
+revops lead import prospects.csv          # bulk-load day 1's list (template in docs/)
 revops lead add "Pixel Forge" --segment indie-game --handle @pixelforge \
        --product "roguelike launching in March"
 revops lead set 1 spec_made               # made the free 5-second clip

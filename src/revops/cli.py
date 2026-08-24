@@ -210,10 +210,14 @@ def cmd_lead(conn, a) -> None:
         print(f"#{row['id']} {row['name']} -> {a.stage}{extra}")
         if a.stage == "won":
             print("  revenue recorded automatically.")
+    elif a.action == "import":
+        n = _import_leads(conn, a.name)
+        print(f"imported {n} leads from {a.name}")
+        print("next: `revops lead list --stage sourced` to see who needs a spec clip")
     elif a.action == "list":
-        rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM leads ORDER BY "
-            "CASE stage WHEN 'won' THEN 0 ELSE 1 END, last_touch_at DESC")]
+        q = ("SELECT * FROM leads WHERE (? IS NULL OR stage = ?) "
+             "ORDER BY CASE stage WHEN 'won' THEN 0 ELSE 1 END, last_touch_at DESC")
+        rows = [dict(r) for r in conn.execute(q, (a.stage, a.stage))]
         if not rows:
             print("no leads yet — `revops lead add \"Name\" --segment indie-game`")
             return
@@ -223,6 +227,31 @@ def cmd_lead(conn, a) -> None:
             print(f"  {r['id']:>3} {(r['name'] or '')[:25]:<26}"
                   f"{(r['segment'] or '-')[:13]:<14}{r['stage']:<13}"
                   f"{r['outcome'] or '-':<9}")
+
+
+
+def _import_leads(conn, path: str) -> int:
+    """Bulk-load prospects from CSV so day one is 20 minutes, not two hours.
+
+    Columns: name, handle, channel, segment, product, source, notes.
+    Only `name` is required; unknown columns are ignored.
+    """
+    import csv
+    from . import sprint as S
+
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    fields = {"handle", "channel", "segment", "product", "source", "notes"}
+    n = 0
+    for row in rows:
+        clean = {(k or "").strip().lower(): (v or "").strip()
+                 for k, v in row.items() if k}
+        name = clean.get("name")
+        if not name:
+            continue
+        S.add_lead(conn, name, **{k: (clean.get(k) or None) for k in fields})
+        n += 1
+    return n
 
 
 def cmd_pipeline(conn, a) -> None:
@@ -370,8 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_sprint)
 
     ld = sub.add_parser("lead", help="manage sales prospects")
-    ld.add_argument("action", choices=["add", "set", "list"])
-    ld.add_argument("name", nargs="?", help="name, handle, or id")
+    ld.add_argument("action", choices=["add", "set", "list", "import"])
+    ld.add_argument("name", nargs="?", help="name/handle/id, or CSV path for import")
     ld.add_argument("stage", nargs="?",
                     help="sourced|spec_made|contacted|replied|negotiating|won|lost|ghosted")
     ld.add_argument("--handle")
@@ -381,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     ld.add_argument("--source")
     ld.add_argument("--amount", type=float, help="closed value when stage=won")
     ld.add_argument("--notes")
+    ld.add_argument("--stage", help="filter `list` by funnel stage")
     ld.set_defaults(fn=cmd_lead)
 
     pl = sub.add_parser("pipeline", help="sprint progress, conversion, and today's target")

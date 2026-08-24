@@ -78,6 +78,53 @@ local businesses. The style mismatch kills a good offer.
 
 ---
 
+## Sourcing: fill the list in 20 minutes
+
+Day 1 asks for 50 prospects. Do it by bulk-import, not one at a time.
+
+Copy `docs/prospects-template.csv`, fill it while browsing these, then:
+
+```bash
+revops lead import my-prospects.csv
+revops lead list --stage sourced      # who still needs a spec clip
+```
+
+**Where to browse (open all five in tabs):**
+
+| Source | URL | What to filter for |
+|---|---|---|
+| Steam, coming soon | `store.steampowered.com/search/?filter=comingsoon&tags=492` | A **dated** release in the next 60 days |
+| itch.io, newest | `itch.io/games/new-and-popular` | Devs posting active devlogs |
+| Work With Indies | `workwithindies.com` | Studios already hiring freelance — proven budget |
+| r/IndieDev | Screenshot Saturday threads | Anyone showing art they're proud of |
+| X | `#screenshotsaturday` `#indiedev` | Replies enabled, posts this week |
+
+**The one filter that matters: a dated launch inside 60 days.** It means the
+budget is already allocated and the deadline is real. A dev with no date is a
+dev with no urgency, and urgency is what closes deals in a week.
+
+Fill the `notes` column with the specific detail you'll quote back at them.
+If you can't find one in 30 seconds, skip that prospect — the message won't
+work without it, and a generic DM is worse than no DM.
+
+---
+
+## Why $200 is the right number
+
+Market rate for indie animation work runs about **$39/hour**, and a
+traditional animator quotes **$200-$800** for a 15-30 second spot. So:
+
+- **To them:** $200 with a 48-hour turnaround is at the bottom of the range
+  they already expect to pay. Easy yes, no budget approval needed.
+- **To you:** the piece takes about an hour with your pipeline. That's ~5x the
+  market hourly rate.
+
+That gap is the whole business. It exists because AI collapsed the production
+time while the market price hasn't moved yet. Price against *their* alternative
+(a $400 animator), never against your cost (a few dollars of credits).
+
+---
+
 ## The message
 
 Send the clip **in the first message**. Never ask permission to send it.
