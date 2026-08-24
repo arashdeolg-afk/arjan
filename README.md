@@ -33,6 +33,35 @@ export REVOPS_DB=data/revops.db     # real data; gitignored
 
 ---
 
+## The 7-day sprint — start here if you want money this week
+
+The fastest predictable revenue isn't content, it's **client work sold by
+direct outreach with free spec work attached**. No audience needed, no
+algorithm in the loop: if 15 contacts produce 1 sale, 45 produce ~3, and that
+is a decision rather than a hope.
+
+Full plan, targeting, and the actual message copy: **[docs/SPRINT.md](docs/SPRINT.md)**
+
+```bash
+revops sprint --goal 600 --price 200      # computes your daily contact target
+revops lead add "Pixel Forge" --segment indie-game --handle @pixelforge \
+       --product "roguelike launching in March"
+revops lead set 1 spec_made               # made the free 5-second clip
+revops lead set 1 contacted               # sent it
+revops lead set 1 replied
+revops lead set 1 won --amount 200        # records revenue automatically
+revops pipeline                           # funnel, conversion, on-track or behind
+revops followups                          # who to chase today
+```
+
+`pipeline` blends your real conversion rates with baseline assumptions, so one
+lucky close never reads as a 100% close rate — and once you have real volume,
+your numbers take over. It recomputes the daily target every time, so falling
+behind shows up as a bigger number tomorrow rather than a nasty surprise on
+day 7.
+
+---
+
 ## Daily use
 
 ```bash
@@ -77,6 +106,10 @@ alias revops='PYTHONPATH=/home/user/arjan/src python3 -m revops'
 | `report --days N` | Full analysis: P&L, platforms, topics, hooks, actions |
 | `dash` | Self-contained HTML dashboard |
 | `demo` | Seed realistic sample data |
+| `sprint` | Start a revenue sprint; computes the daily contact target |
+| `lead` | Add and advance sales prospects (`add` / `set` / `list`) |
+| `pipeline` | Funnel, conversion rates, and whether you're on pace |
+| `followups` | Who to chase today, hottest leads first |
 
 ---
 
@@ -103,7 +136,9 @@ src/revops/
   ledger.py        writes: content, posts, metrics, revenue, costs
   analytics.py     reads: P&L, platform efficiency, what's working
   monetization.py  revenue streams, unlock gates, activation steps
+  sprint.py        outreach funnel: stages, conversion math, follow-ups
   dashboard.py     self-contained HTML output
   cli.py           the interface
-docs/PLAYBOOK.md   the strategy — the important file
+docs/PLAYBOOK.md   the long-run strategy
+docs/SPRINT.md     the 7-day plan to a first paying client
 ```

@@ -92,6 +92,48 @@ CREATE TABLE IF NOT EXISTS experiments (
     result            TEXT
 );
 
+-- ---------------------------------------------------------------- sprint
+-- Direct-outreach sales pipeline. This is the deterministic revenue
+-- engine: unlike content, its output is a function of volume, not luck.
+
+CREATE TABLE IF NOT EXISTS leads (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT NOT NULL,
+    handle            TEXT,                            -- @handle, email, discord
+    channel           TEXT,                            -- x | instagram | discord | email | reddit
+    segment           TEXT,                            -- indie-game | vtuber | shopify | app
+    product           TEXT,                            -- what they sell; the spec piece is about THIS
+    source            TEXT,                            -- where you found them
+    -- Furthest point reached in the funnel. Never regresses, so funnel
+    -- counts stay honest even after a lead dies.
+    stage             TEXT NOT NULL DEFAULT 'sourced',
+    outcome           TEXT,                            -- NULL | won | lost | ghosted
+    quoted_usd        REAL,
+    closed_usd        REAL,
+    created_at        TEXT NOT NULL,
+    last_touch_at     TEXT,
+    notes             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS touches (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id           INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    occurred_at       TEXT NOT NULL,
+    kind              TEXT NOT NULL,                   -- spec | outreach | followup | call | delivery
+    notes             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sprint (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    goal_usd          REAL NOT NULL,
+    price_usd         REAL NOT NULL,
+    started_at        TEXT NOT NULL,
+    days              INTEGER NOT NULL DEFAULT 7
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_stage    ON leads(stage);
+CREATE INDEX IF NOT EXISTS idx_touches_lead   ON touches(lead_id, occurred_at);
+
 CREATE INDEX IF NOT EXISTS idx_posts_content   ON posts(content_id);
 CREATE INDEX IF NOT EXISTS idx_posts_platform  ON posts(platform);
 CREATE INDEX IF NOT EXISTS idx_metrics_post    ON metrics(post_id, captured_at);

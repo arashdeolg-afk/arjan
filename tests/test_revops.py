@@ -198,3 +198,119 @@ class TestDemoAndDashboard(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSprint(Base):
+    def setUp(self):
+        super().setUp()
+        from revops import sprint as S
+        self.S = S
+
+    def add(self, name, **kw):
+        return self.S.add_lead(self.conn, name, **kw)
+
+    def test_stage_never_regresses(self):
+        """A lead that replied must keep counting as replied forever.
+
+        Otherwise re-logging an earlier step would quietly delete evidence
+        from the funnel and inflate the apparent conversion rate.
+        """
+        lid = self.add("A")
+        self.S.set_stage(self.conn, lid, "replied")
+        self.S.set_stage(self.conn, lid, "contacted")
+        row = self.conn.execute("SELECT stage FROM leads WHERE id=?", (lid,)).fetchone()
+        self.assertEqual(row["stage"], "replied")
+
+    def test_lost_leads_still_count_toward_earlier_stages(self):
+        lid = self.add("B")
+        self.S.set_stage(self.conn, lid, "replied")
+        self.S.set_stage(self.conn, lid, "lost")
+        counts = {f["stage"]: f["count"] for f in self.S.funnel(self.conn)}
+        self.assertEqual(counts["contacted"], 1)
+        self.assertEqual(counts["replied"], 1)
+        self.assertEqual(counts["won"], 0)
+
+    def test_winning_records_revenue_automatically(self):
+        lid = self.add("C")
+        self.S.set_stage(self.conn, lid, "won", amount=250.0)
+        total = self.conn.execute(
+            "SELECT SUM(amount_usd) AS s FROM revenue WHERE stream='client_ugc'"
+        ).fetchone()["s"]
+        self.assertAlmostEqual(total, 250.0)
+        self.assertAlmostEqual(A.pnl(self.conn, 30)["revenue"], 250.0)
+
+    def test_rates_lean_on_prior_until_enough_data(self):
+        """One lucky close must not read as a 100% conversion rate."""
+        lid = self.add("D")
+        self.S.set_stage(self.conn, lid, "won", amount=200.0)
+        r = self.S.rates(self.conn)[("contacted", "replied")]
+        self.assertFalse(r["trusted"])
+        self.assertLess(r["rate"], 0.6, "single observation should be pulled toward prior")
+
+    def test_rates_shift_toward_observed_with_volume(self):
+        for i in range(40):
+            lid = self.add(f"L{i}")
+            self.S.set_stage(self.conn, lid, "contacted")
+            if i % 2 == 0:
+                self.S.set_stage(self.conn, lid, "replied")
+        r = self.S.rates(self.conn)[("contacted", "replied")]
+        self.assertTrue(r["trusted"])
+        self.assertGreater(r["rate"], 0.40)   # observed 50%, prior 25%
+
+    def test_status_computes_required_daily_volume(self):
+        self.S.start_sprint(self.conn, goal_usd=600, price_usd=200, days=7)
+        st = self.S.status(self.conn)
+        self.assertAlmostEqual(st["wins_needed"], 3.0)
+        self.assertGreater(st["contacts_needed"], 20)
+        self.assertGreater(st["per_day"], 1)
+        self.assertAlmostEqual(st["remaining"], 600.0)
+
+    def test_status_tracks_progress_against_goal(self):
+        self.S.start_sprint(self.conn, goal_usd=600, price_usd=200)
+        lid = self.add("Paying")
+        self.S.set_stage(self.conn, lid, "won", amount=250.0)
+        st = self.S.status(self.conn)
+        self.assertAlmostEqual(st["earned"], 250.0)
+        self.assertAlmostEqual(st["remaining"], 350.0)
+
+    def test_followups_exclude_closed_and_over_touched(self):
+        old = "2000-01-01T00:00:00+00:00"
+        live = self.add("Live")
+        self.S.set_stage(self.conn, live, "contacted")
+        won = self.add("Won")
+        self.S.set_stage(self.conn, won, "won", amount=100.0)
+        for lid in (live, won):
+            self.conn.execute("UPDATE leads SET last_touch_at=? WHERE id=?", (old, lid))
+        self.conn.commit()
+        names = [r["name"] for r in self.S.followups(self.conn)]
+        self.assertIn("Live", names)
+        self.assertNotIn("Won", names)
+
+    def test_followups_stop_after_three_attempts(self):
+        lid = self.add("Chased")
+        self.S.set_stage(self.conn, lid, "contacted")
+        for _ in range(3):
+            self.S.log_touch(self.conn, lid, "followup")
+        self.conn.execute("UPDATE leads SET last_touch_at=? WHERE id=?",
+                          ("2000-01-01T00:00:00+00:00", lid))
+        self.conn.commit()
+        self.assertEqual(self.S.followups(self.conn), [])
+
+    def test_segment_breakdown_ranks_by_revenue(self):
+        good = self.add("G", segment="indie-game")
+        self.S.set_stage(self.conn, good, "won", amount=300.0)
+        bad = self.add("B2", segment="vtuber")
+        self.S.set_stage(self.conn, bad, "contacted")
+        self.assertEqual(self.S.by_segment(self.conn)[0]["segment"], "indie-game")
+
+    def test_resolve_lead_by_name_or_handle(self):
+        lid = self.add("Studio X", handle="@studiox")
+        self.assertEqual(self.S.resolve_lead(self.conn, "Studio X"), lid)
+        self.assertEqual(self.S.resolve_lead(self.conn, "@studiox"), lid)
+        with self.assertRaises(LookupError):
+            self.S.resolve_lead(self.conn, "@nobody")
+
+    def test_rejects_unknown_stage(self):
+        lid = self.add("E")
+        with self.assertRaises(ValueError):
+            self.S.set_stage(self.conn, lid, "vibing")
