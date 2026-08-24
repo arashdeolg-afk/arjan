@@ -107,3 +107,42 @@ src/revops/
   cli.py           the interface
 docs/PLAYBOOK.md   the strategy — the important file
 ```
+
+---
+
+## Also in this repo: `polymkt`
+
+A read-only [Polymarket](https://polymarket.com) client, same house rules —
+stdlib only, local-first, SQLite. Prediction-market prices are probabilities,
+and this reads them from a terminal.
+
+```bash
+PYTHONPATH=src python3 -m polymkt demo          # synthetic data, no network
+PYTHONPATH=src python3 -m polymkt markets       # top markets by volume
+PYTHONPATH=src python3 -m polymkt market <slug> --live
+PYTHONPATH=src python3 -m polymkt watch add <slug>
+PYTHONPATH=src python3 -m polymkt snap          # cron-friendly snapshot
+PYTHONPATH=src python3 -m polymkt moves --days 7
+```
+
+It answers what the API alone won't: **how a probability moved.** `snap` records
+book snapshots locally, append-only; `moves` reports the change with its sample
+size attached, because two snapshots is a line and not a trend.
+
+No credentials required — everything it reads is public. See
+**[docs/POLYMARKET.md](docs/POLYMARKET.md)** for the API gotchas (token id vs
+condition id, JSON-inside-JSON, why the midpoint isn't the price you pay) and
+for which endpoints are still unverified.
+
+```
+src/polymkt/
+  http.py          urllib client: throttle, backoff, injectable transport
+  endpoints.py     the API surface as data, with per-endpoint provenance
+  models.py        normalisation — where the JSON-inside-JSON is untangled
+  gamma.py         discovery: events, markets, search
+  clob.py          live prices, order books, history
+  data.py          positions, activity, holders
+  store.py         watchlist + append-only quote history
+  samples.py       synthetic payloads, so demo and tests run offline
+  cli.py           the interface
+```
