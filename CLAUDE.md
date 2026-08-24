@@ -50,10 +50,14 @@ Same sample-size discipline as `revops`: `moves` prints `n` beside every change.
 ```bash
 PYTHONPATH=src python3 -m revops demo      # sample data
 PYTHONPATH=src python3 -m revops report
-PYTHONPATH=src python3 -m polymkt demo     # offline Polymarket walkthrough
-PYTHONPATH=src python3 -m polymkt doctor   # verify endpoints (needs network)
+python3 polymkt.py demo                    # offline Polymarket walkthrough
+python3 polymkt.py doctor                  # verify endpoints (needs network)
 python3 -m unittest discover -s tests -v   # tests
 ```
+
+`polymkt.py` at the repo root is a path shim so the CLI runs without
+`PYTHONPATH`; the bash-only `PYTHONPATH=src python3 -m polymkt` form still
+works but breaks on Windows PowerShell.
 
 Tests set `REVOPS_DB` / `POLYMKT_DB` to a temp path — never let a test touch
 `data/revops.db` or `data/polymkt.db`. Every `polymkt` test runs offline via an

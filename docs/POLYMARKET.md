@@ -70,7 +70,7 @@ server.** Rather than hide that, provenance is recorded per endpoint in
 To check the whole catalog from a machine with network access:
 
 ```bash
-PYTHONPATH=src python3 -m polymkt doctor
+python3 polymkt.py doctor      # or: python polymkt.py doctor   (Windows)
 ```
 
 It probes every endpoint that needs no user-supplied id and prints pass/fail.

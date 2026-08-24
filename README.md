@@ -116,14 +116,33 @@ A read-only [Polymarket](https://polymarket.com) client, same house rules —
 stdlib only, local-first, SQLite. Prediction-market prices are probabilities,
 and this reads them from a terminal.
 
+From a checkout, `polymkt.py` works on every platform with no environment
+setup — run it from the repo root:
+
 ```bash
-PYTHONPATH=src python3 -m polymkt demo          # synthetic data, no network
-PYTHONPATH=src python3 -m polymkt markets       # top markets by volume
-PYTHONPATH=src python3 -m polymkt market <slug> --live
-PYTHONPATH=src python3 -m polymkt watch add <slug>
-PYTHONPATH=src python3 -m polymkt snap          # cron-friendly snapshot
-PYTHONPATH=src python3 -m polymkt moves --days 7
+python3 polymkt.py demo               # synthetic data, no network
+python3 polymkt.py markets            # top markets by volume
+python3 polymkt.py market <slug> --live
+python3 polymkt.py watch add <slug>
+python3 polymkt.py snap               # cron-friendly snapshot
+python3 polymkt.py moves --days 7
+python3 polymkt.py doctor             # verify endpoints (needs network)
 ```
+
+On Windows PowerShell the interpreter is usually `python` or `py -3`, and the
+`PYTHONPATH=src …` prefix used elsewhere in this README is **bash-only** — it
+fails with `The term 'PYTHONPATH=src' is not recognized`. Use the shim above,
+or set the variable as its own statement:
+
+```powershell
+cd $HOME\arjan
+python polymkt.py doctor          # simplest
+
+$env:PYTHONPATH = "src"           # or the module form, in two steps
+python -m polymkt doctor
+```
+
+Needs Python 3.10 or newer; the shim says so plainly if it isn't.
 
 It answers what the API alone won't: **how a probability moved.** `snap` records
 book snapshots locally, append-only; `moves` reports the change with its sample
