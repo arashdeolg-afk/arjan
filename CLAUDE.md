@@ -1,5 +1,15 @@
 # Working in this repo
 
+Two apps live here, both pure-stdlib Python 3.11:
+
+- `src/revops` — the revenue tracker (below).
+- `src/forge` — a self-hosted Replit-style builder for websites and apps
+  (browser IDE, live preview, code runner, Claude AI pane). See
+  `docs/FORGE.md`. Its user data lives in `data/forge/` (gitignored);
+  every network-supplied file path must go through `Store.resolve` (the
+  path jail), and tests construct `Store(tmpdir)` so nothing touches
+  real data.
+
 `revops` is a revenue tracker for Arjan's AI-content studio. It exists to
 answer: what earned, what didn't, and what's unlocked but unused.
 

@@ -10,5 +10,8 @@ venv/
 data/*.db
 data/*.db-journal
 data/*.sqlite3
+
+# Local data: forge projects and settings (API key!) stay off GitHub
+data/forge/
 out/
 .env
