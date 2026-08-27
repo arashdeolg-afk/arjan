@@ -12,3 +12,6 @@ data/*.db-journal
 data/*.sqlite3
 out/
 .env
+data/deoltech.db
+data/deoltech.db-wal
+data/deoltech.db-shm
