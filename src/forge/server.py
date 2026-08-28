@@ -13,6 +13,7 @@ defenses matter even for a localhost tool:
 
 from __future__ import annotations
 
+import http.client
 import json
 import mimetypes
 import re
@@ -29,6 +30,12 @@ from .store import Store, StoreError
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 25 * 1024 * 1024
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+# Not forwarded in either direction by the app proxy.
+HOP_HEADERS = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host",
+    "content-length", "accept-encoding",
+}
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -173,6 +180,9 @@ class ForgeHandler(BaseHTTPRequestHandler):
             path = urllib.parse.unquote(split.path)
             query = urllib.parse.parse_qs(split.query)
 
+            if path.startswith("/proxy/"):
+                return self._proxy(method, path, split.query)
+
             if path.startswith("/api/"):
                 if method != "GET" and self.headers.get("X-Forge-Client") is None:
                     return self._error(
@@ -254,6 +264,78 @@ class ForgeHandler(BaseHTTPRequestHandler):
         if mime.startswith("text/"):
             mime += "; charset=utf-8"
         self._send(200, mime, data)
+
+    def _proxy(self, method: str, path: str, rawquery: str) -> None:
+        """Forward a request to the user app listening on the project's port.
+
+        Lets the preview pane show live server apps, not just static files.
+        Only ever connects to 127.0.0.1 on the port stored in project
+        metadata (validated 1024-65535 by the store).
+        """
+        parts = path[len("/proxy/"):].split("/", 1)
+        pid = parts[0]
+        target = "/" + (parts[1] if len(parts) > 1 else "")
+        meta = self.store.get_meta(pid)  # 404 for unknown projects
+        port = int(meta.get("port") or 0)
+        if not port:
+            return self._proxy_wait(pid, 0)
+        if rawquery:
+            target += "?" + rawquery
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
+            raise ApiError("request too large", 413)
+        body = self.rfile.read(length) if length else None
+
+        headers = {k: v for k, v in self.headers.items()
+                   if k.lower() not in HOP_HEADERS}
+        headers["Host"] = f"127.0.0.1:{port}"
+        headers["Accept-Encoding"] = "identity"
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        try:
+            conn.request(method, target, body=body, headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+        except (ConnectionError, TimeoutError, OSError):
+            return self._proxy_wait(pid, port)
+        finally:
+            conn.close()
+
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            lk = k.lower()
+            if lk in HOP_HEADERS:
+                continue
+            if lk == "location" and v.startswith("/") and not v.startswith("//"):
+                v = f"/proxy/{pid}" + v
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _proxy_wait(self, pid: str, port: int) -> None:
+        if port:
+            hint = (f"Waiting for your app on port {port}…<br>"
+                    "start it with the <b>Run</b> button.")
+            retry = "<meta http-equiv='refresh' content='1.5'>"
+        else:
+            hint = ("This project has no app port set.<br>"
+                    "Add one in project settings to preview a server app.")
+            retry = ""
+        page = (
+            f"<!DOCTYPE html><meta charset='utf-8'>{retry}"
+            "<body style='background:#0b0e13;color:#9aa7b8;font-family:system-ui;"
+            "display:grid;place-items:center;height:100vh;margin:0'>"
+            f"<div style='text-align:center;line-height:1.7'>"
+            f"<div style='font-size:34px'>⏳</div><p>{hint}</p></div></body>"
+        )
+        self._send(502, "text/html; charset=utf-8", page.encode("utf-8"))
 
     def _preview_404(self, pid: str, rel: str) -> None:
         page = (

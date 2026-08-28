@@ -329,7 +329,7 @@ async function renderDashboard() {
         </div>
       </header>
       <section class="db-hero">
-        <h1>Build websites &amp; apps<br>right in your browser.</h1>
+        <h1>Build websites &amp; apps <br>right in your browser.</h1>
         <p class="db-sub">Pick a template, edit with a live preview, run real code,
           download the result. Pair with Claude to build even faster.</p>
         <button class="btn primary big" id="new-btn">${I.plus}<span>New project</span></button>
@@ -944,6 +944,10 @@ async function renderWorkspace(pid) {
     try {
       await api("POST", `/api/projects/${pid}/run`, {});
       attachStream();
+      if (+ws.meta.port) {
+        ws.previewMode = "app";
+        setRight("preview");
+      }
     } catch (e) { toast(e.message, "err"); }
   }
 
@@ -969,9 +973,22 @@ async function renderWorkspace(pid) {
   function renderPreview() {
     rightTools.innerHTML = "";
     rightBody.innerHTML = "";
-    const url = `/p/${pid}/`;
+    const port = +ws.meta.port || 0;
+    if (!port) ws.previewMode = "files";
+    else if (!ws.previewMode) ws.previewMode = "app";
+    const url = ws.previewMode === "app" ? `/proxy/${pid}/` : `/p/${pid}/`;
     previewFrame = el("iframe", { class: "preview-frame", src: url, title: "Preview" });
     rightBody.appendChild(previewFrame);
+    if (port) {
+      const seg = el("div", { class: "seg" }, `
+        <button class="seg-btn${ws.previewMode === "files" ? " active" : ""}" data-m="files">Files</button>
+        <button class="seg-btn${ws.previewMode === "app" ? " active" : ""}" data-m="app">App :${port}</button>`);
+      $$("button", seg).forEach((b) => b.addEventListener("click", () => {
+        ws.previewMode = b.dataset.m;
+        renderPreview();
+      }));
+      rightTools.appendChild(seg);
+    }
     const refresh = el("button", { class: "btn icon ghost sm", title: "Refresh" }, I.refresh);
     refresh.addEventListener("click", () => reloadPreview(true));
     const ext = el("a", {
@@ -1182,6 +1199,9 @@ async function renderWorkspace(pid) {
         <label class="label">Run command <span class="hint-inline">what the Run button executes</span></label>
         <input class="input mono" id="ps-run" value="${esc(ws.meta.run || "")}"
                placeholder="python3 -u main.py" spellcheck="false">
+        <label class="label">App port <span class="hint-inline">for server apps — the preview connects to it while running</span></label>
+        <input class="input mono" id="ps-port" value="${+ws.meta.port || ""}"
+               placeholder="8000" spellcheck="false" inputmode="numeric">
         <label class="label">Kind</label>
         <select class="select" id="ps-kind">
           <option value="web"${ws.meta.kind === "web" ? " selected" : ""}>website (leads with preview)</option>
@@ -1200,9 +1220,12 @@ async function renderWorkspace(pid) {
                 name: $("#ps-name", box).value,
                 run: $("#ps-run", box).value,
                 kind: $("#ps-kind", box).value,
+                port: $("#ps-port", box).value.trim(),
               });
               $("#w-title").textContent = ws.meta.name;
               document.title = `${ws.meta.name} · Forge`;
+              if (!+ws.meta.port) ws.previewMode = "files";
+              if (ws.right === "preview") renderPreview();
               toast("Saved", "ok");
               close();
             } catch (e) { toast(e.message, "err"); }

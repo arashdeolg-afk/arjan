@@ -24,11 +24,24 @@ PYTHONPATH=src python3 -m forge serve --port 9000 --open
 |---|---|---|
 | **Website** | HTML/CSS/JS landing-page starter | Edit → autosave → the preview pane live-reloads |
 | **Python app** | Terminal program starter | Run → output streams to the console; the input box feeds `input()` |
+| **Web server** | Python server + page in one project | Run → the preview connects to your live server through the app proxy |
 | **Browser game** | Canvas breakout starter | Runs right in the preview pane |
 | **Blank** | Empty project | Bring your own files, or let the AI scaffold them |
 
 Projects are plain directories under `data/forge/projects/<id>/` — open
 them in any other editor, or **Export zip** to ship them anywhere.
+
+## Server apps and the proxy
+
+A project with an **app port** set (project settings; the Web server
+template ships with 8000) gets a second preview mode: `App :<port>`.
+While the project is running, `/proxy/<id>/…` forwards requests to
+`127.0.0.1:<port>` — so the preview pane shows the app your own process
+is serving, not static files. Absolute `Location:` redirects are
+rewritten to stay inside the proxy; until the server is up, the pane
+shows a waiting page that retries by itself. One rule for proxied apps:
+use **relative** URLs (`api/hello`, not `/api/hello`) in pages, since
+the app is mounted under `/proxy/<id>/`.
 
 ## The AI pane (Claude)
 
@@ -93,5 +106,5 @@ do that on networks you trust.
 - **Mobile:** the app is responsive and installable (PWA manifest +
   service worker) today; a dedicated mobile app can reuse the JSON+SSE
   API as-is.
-- Webview proxy for projects that run their own server (Flask etc.).
 - AI: multi-file context selection, diff view before apply.
+- Proxy: WebSocket passthrough for apps that use them.

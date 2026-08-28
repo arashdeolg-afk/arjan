@@ -104,6 +104,7 @@ class Store:
             "kind": tpl["kind"],
             "run": tpl["run"],
             "entry": tpl["entry"],
+            "port": tpl.get("port", 0),
             "created": _now(),
             "updated": _now(),
         }
@@ -142,6 +143,18 @@ class Store:
                 if key == "kind" and value not in ("web", "console"):
                     raise StoreError("kind must be 'web' or 'console'")
                 meta[key] = value
+        if "port" in patch:
+            port = patch["port"]
+            if port in (None, "", 0, "0"):
+                meta["port"] = 0
+            else:
+                try:
+                    port = int(port)
+                except (TypeError, ValueError):
+                    raise StoreError("port must be a number")
+                if not 1024 <= port <= 65535:
+                    raise StoreError("port must be between 1024 and 65535")
+                meta["port"] = port
         meta["updated"] = _now()
         self._write_meta(pdir, meta)
         return meta

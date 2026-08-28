@@ -78,6 +78,10 @@ class TestProjects(Base):
         with self.assertRaises(StoreError):
             self.store.get_meta(meta["id"])
 
+    def test_webapp_template_carries_port(self):
+        self.assertEqual(self.store.create("Server", "webapp")["port"], 8000)
+        self.assertEqual(self.store.create("Site", "website")["port"], 0)
+
     def test_unknown_project_is_404(self):
         with self.assertRaises(StoreError) as ctx:
             self.store.get_meta("nope")

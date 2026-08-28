@@ -273,6 +273,93 @@ reset(true);
 step();
 """
 
+_WEBAPP_SERVER = '''\
+"""A tiny web app — server and site in one project.
+
+Press Run to start it, and the preview pane connects to the live server
+through forge's app proxy. Keep links and fetch() paths RELATIVE
+("api/hello", not "/api/hello") so they work behind the proxy.
+"""
+
+import json
+import time
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = 8000
+started = time.time()
+hits = 0
+
+
+class App(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        global hits
+        if self.path.rstrip("/").endswith("/api/hello"):
+            hits += 1
+            body = json.dumps({
+                "message": "hello from your live server",
+                "uptime_seconds": round(time.time() - started, 1),
+                "hits": hits,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()  # everything else: static files from this folder
+
+    def log_message(self, fmt, *args):
+        print(f"{self.command} {self.path}")
+
+
+if __name__ == "__main__":
+    print(f"serving on http://127.0.0.1:{PORT}")
+    ThreadingHTTPServer(("127.0.0.1", PORT), App).serve_forever()
+'''
+
+_WEBAPP_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+           background: #0d1017; color: #e8ecf3; font-family: system-ui, sans-serif; }
+    .card { background: #151a23; border: 1px solid #232b38; border-radius: 16px;
+            padding: 36px 44px; text-align: center; }
+    h1 { margin: 0 0 6px; }
+    .big { font-size: 42px; font-weight: 800; color: #3ecf8e; }
+    p { color: #8b94a7; }
+    button { background: #3ecf8e; color: #08130d; border: none; border-radius: 999px;
+             padding: 10px 22px; font-weight: 700; font-size: 15px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Pulse</h1>
+    <p>served live by <code>server.py</code></p>
+    <div class="big" id="hits">–</div>
+    <p id="status">press the button to call the API</p>
+    <button id="ping">Ping the server</button>
+  </div>
+  <script>
+    // Relative path, so it works through forge's app proxy.
+    async function ping() {
+      const r = await fetch("api/hello");
+      const data = await r.json();
+      document.getElementById("hits").textContent = data.hits;
+      document.getElementById("status").textContent =
+        `${data.message} — up ${data.uptime_seconds}s`;
+    }
+    document.getElementById("ping").addEventListener("click", ping);
+    ping();
+  </script>
+</body>
+</html>
+"""
+
 _BLANK_README = """\
 # New project
 
@@ -301,6 +388,15 @@ TEMPLATES: dict[str, dict] = {
         "entry": "main.py",
         "files": {"main.py": _PYTHON_MAIN},
     },
+    "webapp": {
+        "label": "Web server",
+        "desc": "Python server + page — Run it and the preview goes live.",
+        "kind": "web",
+        "run": "python3 -u server.py",
+        "entry": "server.py",
+        "port": 8000,
+        "files": {"server.py": _WEBAPP_SERVER, "index.html": _WEBAPP_HTML},
+    },
     "game": {
         "label": "Browser game",
         "desc": "Canvas breakout starter — runs right in the preview pane.",
@@ -323,6 +419,7 @@ DEMO_PROJECTS = [
     ("Aurora Landing", "website"),
     ("Number Oracle", "python"),
     ("Brick Blitz", "game"),
+    ("Pulse Server", "webapp"),
 ]
 
 

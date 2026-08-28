@@ -288,6 +288,122 @@ class TestRunApi(ServerTest):
         self.assertIn("run command", body["error"])
 
 
+class TestProxy(ServerTest):
+    """The app proxy: /proxy/<id>/… forwards to the project's port."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class FakeApp(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, fmt, *args):
+                pass
+
+            def _reply(self, status, ctype, body, extra=None):
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                for k, v in (extra or {}).items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/":
+                    self._reply(200, "text/html", b"<h1>hello from app</h1>")
+                elif self.path.startswith("/api/data"):
+                    self._reply(200, "application/json", b'{"ok": true}')
+                elif self.path == "/redirect":
+                    self._reply(302, "text/plain", b"", {"Location": "/after"})
+                else:
+                    self._reply(404, "text/plain", b"nope")
+
+            def do_POST(self):
+                size = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(size)
+                self._reply(200, "text/plain", b"echo:" + body)
+
+        cls.app = ThreadingHTTPServer(("127.0.0.1", 0), FakeApp)
+        cls.app_port = cls.app.server_address[1]
+        threading.Thread(target=cls.app.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.shutdown()
+        cls.app.server_close()
+        super().tearDownClass()
+
+    def proxied_project(self):
+        pid = self.make_project("Proxy App", template="webapp")["id"]
+        status, meta = self.json_request("PATCH", f"/api/projects/{pid}",
+                                         {"port": self.app_port})
+        self.assertEqual(status, 200)
+        self.assertEqual(meta["port"], self.app_port)
+        return pid
+
+    def test_get_is_forwarded(self):
+        pid = self.proxied_project()
+        status, headers, raw = self.request("GET", f"/proxy/{pid}/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"hello from app", raw)
+        self.assertIn("text/html", headers["Content-Type"])
+        status, _h, raw = self.request("GET", f"/proxy/{pid}/api/data?x=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), {"ok": True})
+
+    def test_post_body_is_forwarded(self):
+        pid = self.proxied_project()
+        status, _h, raw = self.request("POST", f"/proxy/{pid}/echo",
+                                       body={"note": "hi"}, csrf=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b'echo:{"note": "hi"}')
+
+    def test_absolute_redirects_stay_inside_the_proxy(self):
+        pid = self.proxied_project()
+        status, headers, _raw = self.request("GET", f"/proxy/{pid}/redirect")
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], f"/proxy/{pid}/after")
+
+    def test_app_down_shows_waiting_page(self):
+        pid = self.make_project("Down App", template="webapp")["id"]
+        import socket
+        spare = socket.socket()
+        spare.bind(("127.0.0.1", 0))
+        free_port = spare.getsockname()[1]
+        spare.close()
+        self.json_request("PATCH", f"/api/projects/{pid}", {"port": free_port})
+        status, _h, raw = self.request("GET", f"/proxy/{pid}/")
+        self.assertEqual(status, 502)
+        self.assertIn(b"Waiting for your app", raw)
+        self.assertIn(b"refresh", raw)  # the page retries on its own
+
+    def test_no_port_shows_hint_without_retry(self):
+        pid = self.make_project("Portless", template="website")["id"]
+        status, _h, raw = self.request("GET", f"/proxy/{pid}/")
+        self.assertEqual(status, 502)
+        self.assertIn(b"no app port", raw)
+        self.assertNotIn(b"refresh", raw)
+
+    def test_port_validation(self):
+        pid = self.make_project("Ports", template="website")["id"]
+        status, body = self.json_request("PATCH", f"/api/projects/{pid}",
+                                         {"port": 80})
+        self.assertEqual(status, 400)
+        status, body = self.json_request("PATCH", f"/api/projects/{pid}",
+                                         {"port": "abc"})
+        self.assertEqual(status, 400)
+        status, meta = self.json_request("PATCH", f"/api/projects/{pid}",
+                                         {"port": ""})
+        self.assertEqual(meta["port"], 0)
+
+    def test_unknown_project_404s(self):
+        status, _h, _raw = self.request("GET", "/proxy/no-such-project/")
+        self.assertEqual(status, 404)
+
+
 class TestAiApi(ServerTest):
     def test_chat_requires_a_key(self):
         self.json_request("POST", "/api/settings", {"anthropic_api_key": ""})
