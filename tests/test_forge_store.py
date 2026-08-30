@@ -197,6 +197,39 @@ class TestFiles(Base):
         self.assertGreater(self.store.version(self.pid), v2)
 
 
+class TestSearch(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.pid = self.store.create("Searchable", "blank")["id"]
+        self.store.write_file(self.pid, "a.py", "def hello():\n    return 'Hello World'\n")
+        self.store.write_file(self.pid, "sub/b.txt", "nothing here\nhello again\n")
+        import base64
+        self.store.write_file(self.pid, "img.png",
+                              content_b64=base64.b64encode(b"\x89PNG\x00hello").decode())
+
+    def test_case_insensitive_across_files_with_line_numbers(self):
+        out = self.store.search(self.pid, "HELLO")
+        hits = {(r["path"], r["line"]) for r in out["results"]}
+        self.assertIn(("a.py", 1), hits)
+        self.assertIn(("a.py", 2), hits)
+        self.assertIn(("sub/b.txt", 2), hits)
+        self.assertFalse(out["truncated"])
+
+    def test_binary_files_are_skipped(self):
+        out = self.store.search(self.pid, "hello")
+        self.assertNotIn("img.png", [r["path"] for r in out["results"]])
+
+    def test_result_cap_reports_truncation(self):
+        self.store.write_file(self.pid, "many.txt", "match\n" * 300)
+        out = self.store.search(self.pid, "match", max_results=50)
+        self.assertEqual(len(out["results"]), 50)
+        self.assertTrue(out["truncated"])
+
+    def test_empty_query_rejected(self):
+        with self.assertRaises(StoreError):
+            self.store.search(self.pid, "   ")
+
+
 class TestSettings(Base):
     def test_settings_roundtrip_and_key_removal(self):
         self.store.update_settings({"anthropic_api_key": "sk-test", "model": "m"})

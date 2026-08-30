@@ -307,6 +307,36 @@ class Store:
             raise StoreError(f"no such path: {rel}", 404)
         self._touch(pid)
 
+    def search(self, pid: str, query: str, max_results: int = 200) -> dict:
+        """Case-insensitive text search across the project's files."""
+        query = (query or "").strip()
+        if not query:
+            raise StoreError("search query is required")
+        pdir = self._pdir(pid)
+        needle = query.lower()
+        results: list[dict] = []
+        truncated = False
+        for entry in self.tree(pid):
+            if entry["type"] != "file" or entry.get("size", 0) > 512 * 1024:
+                continue
+            try:
+                text = (pdir / entry["path"]).read_text("utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue  # binary or unreadable — not searchable
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if needle in line.lower():
+                    results.append({
+                        "path": entry["path"],
+                        "line": lineno,
+                        "text": line.strip()[:200],
+                    })
+                    if len(results) >= max_results:
+                        truncated = True
+                        break
+            if truncated:
+                break
+        return {"results": results, "truncated": truncated}
+
     def export_zip(self, pid: str) -> bytes:
         pdir = self._pdir(pid)
         buf = io.BytesIO()

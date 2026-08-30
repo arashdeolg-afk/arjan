@@ -63,12 +63,14 @@ machine only in requests to the provider you selected. Environment
 variables always override saved keys.
 
 With **can edit files** on, the model answers in *build mode*: every
-file it creates or changes arrives as a complete `file:` block with an
-**Apply** button (or **Apply all**), which writes it into the project
-and refreshes the preview. Everything streams token-by-token, with a
-stop button mid-generation; on Claude Opus the server-side
-refusal-fallback option is enabled so a safety refusal degrades
-gracefully instead of returning an empty turn.
+file it creates or changes arrives as a complete `file:` block. **Apply**
+opens a review dialog first — a per-file line diff (new files shown as
+all-additions) — so nothing touches the project until you've seen the
+change. The **context** button picks which files the model can read
+(up to 8; defaults to the file you're editing). Everything streams
+token-by-token, with a stop button mid-generation; on Claude Opus the
+server-side refusal-fallback option is enabled so a safety refusal
+degrades gracefully instead of returning an empty turn.
 
 All integrations are raw HTTPS via `urllib` (stdlib-only repo — vendor
 SDKs would be dependencies).
@@ -116,5 +118,5 @@ do that on networks you trust.
 - **Mobile:** the app is responsive and installable (PWA manifest +
   service worker) today; a dedicated mobile app can reuse the JSON+SSE
   API as-is.
-- AI: multi-file context selection, diff view before apply.
 - Proxy: WebSocket passthrough for apps that use them.
+- Git integration: init/commit/history per project.

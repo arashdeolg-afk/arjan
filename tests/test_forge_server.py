@@ -197,6 +197,15 @@ class TestProjectApi(ServerTest):
             "GET", f"/api/projects/{pid}/file?path=../../settings.json")
         self.assertEqual(status, 403)
 
+    def test_search_endpoint(self):
+        pid = self.make_project("Searchy")["id"]
+        status, body = self.json_request(
+            "GET", f"/api/projects/{pid}/search?q=Aurora")
+        self.assertEqual(status, 200)
+        self.assertIn("index.html", [r["path"] for r in body["results"]])
+        status, body = self.json_request("GET", f"/api/projects/{pid}/search?q=")
+        self.assertEqual(status, 400)
+
     def test_export_zip(self):
         pid = self.make_project("Zip Site")["id"]
         status, headers, raw = self.request("GET", f"/api/projects/{pid}/export")

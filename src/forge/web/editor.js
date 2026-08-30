@@ -224,6 +224,20 @@
       this._render();
     }
 
+    revealLine(line) {
+      const value = this.ta.value;
+      let idx = 0;
+      for (let i = 1; i < line; i++) {
+        const nl = value.indexOf("\n", idx);
+        if (nl === -1) { idx = value.length; break; }
+        idx = nl + 1;
+      }
+      this.ta.focus();
+      this.ta.setSelectionRange(idx, idx);
+      this._reveal(idx);
+      this._cursorMoved();
+    }
+
     get _indent() { return this.language === "python" ? "    " : "  "; }
 
     /* ------------------------------------------------------- rendering */

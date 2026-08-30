@@ -148,6 +148,46 @@ svg { width: 16px; height: 16px; flex: none; }
 
 .side.drop { outline: 2px dashed var(--accent); outline-offset: -3px;
   background: #ff9e3d0a; }
+.prov-chip.warn { color: var(--warn); background: #ffd16614; }
+
+/* project search */
+.side-search { padding: 0 10px 8px; }
+.side-search input { width: 100%; background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border2); border-radius: 7px; outline: none;
+  padding: 6px 10px; font: 12.5px var(--sans); }
+.side-search input:focus { border-color: var(--accent); }
+.sr-file { display: flex; gap: 6px; align-items: center; padding: 7px 8px 3px;
+  font: 600 12px var(--sans); color: var(--text); overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; }
+.sr-file svg { width: 13px; height: 13px; }
+.sr-hit { display: flex; gap: 8px; padding: 3px 8px 3px 26px; cursor: pointer;
+  border-radius: 6px; font: 12px var(--mono); color: var(--dim);
+  overflow: hidden; white-space: nowrap; }
+.sr-hit:hover { background: var(--bg2); color: var(--text); }
+.sr-ln { color: var(--faint); min-width: 3ch; text-align: right; flex: none; }
+.sr-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* diff (AI apply review) */
+.diff-file { margin-bottom: 16px; }
+.diff-head { display: flex; gap: 10px; align-items: center; margin-bottom: 7px;
+  font-size: 13px; }
+.diff { border: 1px solid var(--border2); border-radius: 9px; overflow: auto;
+  max-height: 320px; background: #0a0d12; padding: 6px 0;
+  font: 12px/1.55 var(--mono); }
+.dl { padding: 0 12px; white-space: pre; }
+.dl.add { background: #3ecf8e12; color: #8fe6bb; }
+.dl.del { background: #ff6b6b12; color: #ff9b9b; }
+.dl.skip { color: var(--faint); font-style: italic; padding: 2px 12px; }
+
+/* AI context popover */
+.ctx-files { max-height: 320px; overflow: auto; min-width: 250px; }
+.ctx-title { font: 600 12px var(--sans); color: var(--dim); padding: 6px 10px 8px;
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.ctx-check { display: flex; gap: 8px; align-items: center; padding: 5px 10px;
+  border-radius: 6px; font: 12.5px var(--sans); color: var(--dim); cursor: pointer; }
+.ctx-check:hover { background: var(--bg3); color: var(--text); }
+.ctx-check input { accent-color: var(--accent); flex: none; }
+.ctx-check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --------------------------------------------------------- context menu */
 

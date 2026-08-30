@@ -11,4 +11,4 @@ Same rules as the rest of this repo: pure Python 3.11 stdlib, local-first
 Run it:  PYTHONPATH=src python3 -m forge
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

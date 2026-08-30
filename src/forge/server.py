@@ -70,6 +70,7 @@ def _routes() -> list[tuple[str, re.Pattern, str]]:
         ("POST", rf"^/api/projects/{pid}/files$", "files_batch"),
         ("POST", rf"^/api/projects/{pid}/folder$", "folder_post"),
         ("POST", rf"^/api/projects/{pid}/move$", "move_post"),
+        ("GET", rf"^/api/projects/{pid}/search$", "search_get"),
         ("GET", rf"^/api/projects/{pid}/export$", "export_get"),
         ("GET", rf"^/api/projects/{pid}/version$", "version_get"),
         ("POST", rf"^/api/projects/{pid}/run$", "run_start"),
@@ -544,6 +545,10 @@ class ForgeHandler(BaseHTTPRequestHandler):
         result = self.store.move(
             match.group(1), body.get("src", ""), body.get("dst", ""))
         self._json(result)
+
+    def h_search_get(self, match, query):
+        q = (query.get("q") or [""])[0]
+        self._json(self.store.search(match.group(1), q))
 
     def h_export_get(self, match, query):
         pid = match.group(1)

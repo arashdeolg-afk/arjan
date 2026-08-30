@@ -284,6 +284,67 @@ function mdHtml(text) {
   }).join("");
 }
 
+/* ============================================================ line diff */
+
+function diffLines(aText, bText) {
+  const a = aText.split("\n"), b = bText.split("\n");
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let endA = a.length, endB = b.length;
+  while (endA > pre && endB > pre && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
+  const midA = a.slice(pre, endA), midB = b.slice(pre, endB);
+  const n = midA.length, m = midB.length;
+  if (n * m > 400000) return null;  // too big for a per-line diff
+  const w = m + 1;
+  const dp = new Int32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * w + j] = midA[i] === midB[j]
+        ? dp[(i + 1) * w + j + 1] + 1
+        : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    }
+  }
+  const out = [];
+  for (let k = 0; k < pre; k++) out.push([" ", a[k]]);
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (midA[i] === midB[j]) { out.push([" ", midA[i]]); i++; j++; }
+    else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) out.push(["-", midA[i++]]);
+    else out.push(["+", midB[j++]]);
+  }
+  while (i < n) out.push(["-", midA[i++]]);
+  while (j < m) out.push(["+", midB[j++]]);
+  for (let k = endA; k < a.length; k++) out.push([" ", a[k]]);
+  return out;
+}
+
+function diffHtml(current, proposed) {
+  const row = ([t, s]) =>
+    `<div class="dl${t === "+" ? " add" : t === "-" ? " del" : ""}">${esc(s) || "&nbsp;"}</div>`;
+  if (current === null) {  // brand-new file: show it all as additions
+    const lines = proposed.split("\n").slice(0, 400);
+    return `<div class="diff">${lines.map((l) => row(["+", l])).join("")}</div>`;
+  }
+  const d = diffLines(current, proposed);
+  if (!d) return '<p class="hint">Too large to diff — the whole file will be replaced.</p>';
+  const rows = [];
+  let run = [];
+  const flush = () => {
+    if (run.length > 8) {
+      rows.push(...run.slice(0, 3).map(row),
+        `<div class="dl skip">⋯ ${run.length - 6} unchanged lines</div>`,
+        ...run.slice(-3).map(row));
+    } else rows.push(...run.map(row));
+    run = [];
+  };
+  for (const item of d) {
+    if (item[0] === " ") run.push(item);
+    else { flush(); rows.push(row(item)); }
+  }
+  flush();
+  return `<div class="diff">${rows.join("")}</div>`;
+}
+
 /* ============================================================ app state */
 
 const state = { system: null, ws: null };
@@ -599,7 +660,8 @@ async function renderWorkspace(pid) {
     es: null, running: false,
     right: meta.kind === "web" ? "preview" : "ai",
     ai: {
-      msgs: [], busy: false, build: true, includeFile: true, ctrl: null,
+      msgs: [], busy: false, build: true, ctrl: null,
+      ctx: new Set(), ctxCustom: false,
       provider: state.system.ai?.provider || "anthropic",
       model: state.system.ai?.model || state.system.default_model,
     },
@@ -629,6 +691,9 @@ async function renderWorkspace(pid) {
             <button class="btn icon ghost sm" id="t-newdir" title="New folder">${I.folderPlus}</button>
             <button class="btn icon ghost sm" id="t-upload" title="Upload files">${I.upload}</button>
           </span>
+        </div>
+        <div class="side-search">
+          <input id="w-search" placeholder="Search project…" spellcheck="false">
         </div>
         <div class="tree" id="w-tree"></div>
         <input type="file" id="w-file-input" multiple hidden>
@@ -702,6 +767,7 @@ async function renderWorkspace(pid) {
   }
 
   function renderTree() {
+    if (($("#w-search")?.value.trim().length || 0) >= 2) return;
     treeEl.innerHTML = "";
     const visible = ws.tree.filter((entry) => {
       const parts = entry.path.split("/");
@@ -1118,8 +1184,7 @@ async function renderWorkspace(pid) {
           <div class="ai-opts">
             <label class="chk"><input type="checkbox" id="ai-build" ${ws.ai.build ? "checked" : ""}>
               can edit files</label>
-            <label class="chk"><input type="checkbox" id="ai-ctx" ${ws.ai.includeFile ? "checked" : ""}>
-              share current file</label>
+            <button class="btn ghost sm" id="ai-ctx-btn">${I.file}<span id="ai-ctx-label"></span></button>
           </div>
           <div class="ai-inrow">
             <textarea id="ai-input" rows="1"
@@ -1129,7 +1194,11 @@ async function renderWorkspace(pid) {
         </div>
       </div>`;
     $("#ai-build").addEventListener("change", (e) => { ws.ai.build = e.target.checked; });
-    $("#ai-ctx").addEventListener("change", (e) => { ws.ai.includeFile = e.target.checked; });
+    $("#ai-ctx-btn").addEventListener("click", (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      ctxFilesPopover(r.left, r.top);
+    });
+    updateCtxLabel();
     const input = $("#ai-input");
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAi(); }
@@ -1146,14 +1215,64 @@ async function renderWorkspace(pid) {
       const btn = e.target.closest(".apply-btn");
       if (!btn) return;
       const msg = ws.ai.msgs[+btn.closest(".msg").dataset.idx];
-      if (btn.dataset.all) applyFiles(fileBlocks(msg.content));
+      if (btn.dataset.all) confirmApply(fileBlocks(msg.content));
       else {
         const block = fileBlocks(msg.content).find((f) => f.path === btn.dataset.path);
-        if (block) applyFiles([block]);
+        if (block) confirmApply([block]);
       }
     });
     renderAiMsgs();
     updateAiNote();
+  }
+
+  function currentCtxPaths() {
+    if (ws.ai.ctxCustom) return [...ws.ai.ctx].slice(0, 8);
+    return ws.active && !ws.active.binary ? [ws.active.path] : [];
+  }
+
+  function updateCtxLabel() {
+    const label = $("#ai-ctx-label");
+    if (!label) return;
+    if (!ws.ai.ctxCustom) { label.textContent = "context: current file"; return; }
+    const n = currentCtxPaths().length;
+    label.textContent = `context: ${n} file${n === 1 ? "" : "s"}`;
+  }
+
+  function ctxFilesPopover(x, y) {
+    $$(".ctx").forEach((c) => c.remove());
+    const files = ws.tree.filter((e) => e.type === "file").slice(0, 50);
+    const selected = new Set(currentCtxPaths());
+    const pop = el("div", { class: "ctx ctx-files" },
+      `<div class="ctx-title">Files the AI can read
+         <span class="hint-inline">up to 8</span></div>` +
+      files.map((f) => `<label class="ctx-check">
+        <input type="checkbox" data-path="${esc(f.path)}"${selected.has(f.path) ? " checked" : ""}>
+        <span>${esc(f.path)}</span></label>`).join(""));
+    document.body.appendChild(pop);
+    const rect = pop.getBoundingClientRect();
+    pop.style.left = `${Math.min(x, innerWidth - rect.width - 8)}px`;
+    pop.style.top = `${Math.max(8, Math.min(y - rect.height - 6, innerHeight - rect.height - 8))}px`;
+    pop.addEventListener("change", (e) => {
+      const checked = $$("input:checked", pop);
+      if (checked.length > 8) {
+        e.target.checked = false;
+        toast("Up to 8 context files", "err");
+        return;
+      }
+      ws.ai.ctxCustom = true;
+      ws.ai.ctx = new Set($$("input:checked", pop).map((i) => i.dataset.path));
+      updateCtxLabel();
+    });
+    const away = (e) => { if (!pop.contains(e.target)) { pop.remove(); cleanup(); } };
+    const onKey = (e) => { if (e.key === "Escape") { pop.remove(); cleanup(); } };
+    const cleanup = () => {
+      document.removeEventListener("mousedown", away, true);
+      document.removeEventListener("keydown", onKey);
+    };
+    setTimeout(() => {
+      document.addEventListener("mousedown", away, true);
+      document.addEventListener("keydown", onKey);
+    }, 0);
   }
 
   function updateAiNote() {
@@ -1246,8 +1365,7 @@ async function renderWorkspace(pid) {
           mode: ws.ai.build ? "build" : "chat",
           provider: ws.ai.provider,
           model: ws.ai.model,
-          include_paths: ws.ai.includeFile && ws.active && !ws.active.binary
-            ? [ws.active.path] : [],
+          include_paths: currentCtxPaths(),
         }),
       });
       if (!resp.ok) {
@@ -1287,6 +1405,50 @@ async function renderWorkspace(pid) {
       if (btn) { btn.innerHTML = I.send; btn.title = "Send"; }
       renderAiMsgs(true);
     }
+  }
+
+  async function confirmApply(files) {
+    if (!files.length) return;
+    const items = [];
+    for (const f of files) {
+      let current = null, isNew = false;
+      const tab = ws.tabs.find((t) => t.path === f.path);
+      if (tab?.ed) current = tab.ed.getValue();
+      else {
+        try {
+          const d = await api("GET",
+            `/api/projects/${pid}/file?path=${encodeURIComponent(f.path)}`);
+          current = d.binary ? null : d.content;
+        } catch { isNew = true; }
+      }
+      items.push({ ...f, current, isNew });
+    }
+    modal({
+      title: items.length > 1 ? `Review ${items.length} files` : `Review ${items[0].path}`,
+      wide: true,
+      body: (bodyEl) => {
+        bodyEl.innerHTML = items.map((it) => {
+          const badge = it.isNew
+            ? '<span class="prov-chip ok">new file</span>'
+            : it.current === it.content
+              ? '<span class="prov-chip">unchanged</span>'
+              : '<span class="prov-chip warn">modified</span>';
+          const body = it.current === it.content
+            ? '<p class="hint">Identical to what\'s on disk.</p>'
+            : diffHtml(it.isNew ? null : it.current, it.content);
+          return `<div class="diff-file">
+            <div class="diff-head"><b>${esc(it.path)}</b>${badge}</div>${body}</div>`;
+        }).join("");
+      },
+      actions: [
+        { label: "Cancel", kind: "ghost", fn: (close) => close() },
+        {
+          label: files.length > 1 ? `Apply ${files.length} files` : "Apply",
+          kind: "primary",
+          fn: async (close) => { close(); await applyFiles(files); },
+        },
+      ],
+    });
   }
 
   async function applyFiles(files) {
@@ -1428,6 +1590,48 @@ async function renderWorkspace(pid) {
     if (e.target.files.length) uploadFiles([...e.target.files]);
     e.target.value = "";
   });
+  const searchIn = $("#w-search");
+  const runSearch = debounce(async () => {
+    const q = searchIn.value.trim();
+    if (q.length < 2) { renderTree(); return; }
+    let res;
+    try {
+      res = await api("GET",
+        `/api/projects/${pid}/search?q=${encodeURIComponent(q)}`);
+    } catch { return; }
+    if (searchIn.value.trim() !== q) return;  // stale response
+    treeEl.innerHTML = "";
+    if (!res.results.length) {
+      treeEl.innerHTML = `<div class="tree-empty">No matches for “${esc(q)}”.</div>`;
+      return;
+    }
+    let lastPath = null;
+    for (const r of res.results) {
+      if (r.path !== lastPath) {
+        lastPath = r.path;
+        treeEl.appendChild(el("div", { class: "sr-file" },
+          `${fileIcon(r.path)}<span>${esc(r.path)}</span>`));
+      }
+      const row = el("div", { class: "sr-hit", title: `${r.path}:${r.line}` },
+        `<span class="sr-ln">${r.line}</span><span class="sr-text">${esc(r.text)}</span>`);
+      row.addEventListener("click", async () => {
+        await openFile(r.path);
+        ws.active?.ed?.revealLine(r.line);
+      });
+      treeEl.appendChild(row);
+    }
+    if (res.truncated) {
+      treeEl.appendChild(el("div", { class: "tree-empty" }, "…more matches not shown"));
+    }
+  }, 250);
+  searchIn.addEventListener("input", () => {
+    if (searchIn.value.trim().length < 2) renderTree();
+    else runSearch();
+  });
+  searchIn.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { searchIn.value = ""; renderTree(); searchIn.blur(); }
+  });
+
   const sideEl = $("#w-side");
   ["dragenter", "dragover"].forEach((type) => sideEl.addEventListener(type, (e) => {
     if ([...(e.dataTransfer?.types || [])].includes("Files")) {
@@ -1475,6 +1679,10 @@ async function renderWorkspace(pid) {
     if (ws.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ""; }
   };
   addEventListener("beforeunload", onUnload);
+
+  // Console/debug handles (also used by tooling screenshots).
+  ws.renderAiMsgs = renderAiMsgs;
+  ws.confirmApply = confirmApply;
 
   ws.cleanups.push(
     () => ws.es?.close(),
