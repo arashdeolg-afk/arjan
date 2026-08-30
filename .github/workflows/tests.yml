@@ -5,8 +5,11 @@
 name: tests
 
 on:
+  # Scoped to the default branch on purpose. `pull_request` already covers
+  # every branch that has a PR open; listing "**" here as well ran the whole
+  # matrix twice for every push to a PR branch.
   push:
-    branches: ["**"]
+    branches: [claude/money-making-system-7eqn86, main, master]
   pull_request:
   workflow_dispatch:
 
