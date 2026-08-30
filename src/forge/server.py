@@ -71,6 +71,10 @@ def _routes() -> list[tuple[str, re.Pattern, str]]:
         ("POST", rf"^/api/projects/{pid}/folder$", "folder_post"),
         ("POST", rf"^/api/projects/{pid}/move$", "move_post"),
         ("GET", rf"^/api/projects/{pid}/search$", "search_get"),
+        ("GET", rf"^/api/projects/{pid}/snapshots$", "snaps_list"),
+        ("POST", rf"^/api/projects/{pid}/snapshots$", "snaps_create"),
+        ("POST", rf"^/api/projects/{pid}/snapshots/([\w-]+)/restore$", "snaps_restore"),
+        ("DELETE", rf"^/api/projects/{pid}/snapshots/([\w-]+)$", "snaps_delete"),
         ("GET", rf"^/api/projects/{pid}/export$", "export_get"),
         ("GET", rf"^/api/projects/{pid}/version$", "version_get"),
         ("POST", rf"^/api/projects/{pid}/run$", "run_start"),
@@ -545,6 +549,21 @@ class ForgeHandler(BaseHTTPRequestHandler):
         result = self.store.move(
             match.group(1), body.get("src", ""), body.get("dst", ""))
         self._json(result)
+
+    def h_snaps_list(self, match, query):
+        self._json({"snapshots": self.store.list_snapshots(match.group(1))})
+
+    def h_snaps_create(self, match, query):
+        body = self._body_json()
+        self._json(self.store.snapshot(match.group(1),
+                                       body.get("label", "")), 201)
+
+    def h_snaps_restore(self, match, query):
+        self._json(self.store.restore_snapshot(match.group(1), match.group(2)))
+
+    def h_snaps_delete(self, match, query):
+        self.store.delete_snapshot(match.group(1), match.group(2))
+        self._json({"ok": True})
 
     def h_search_get(self, match, query):
         q = (query.get("q") or [""])[0]

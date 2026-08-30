@@ -176,6 +176,9 @@ class Store:
     def delete_project(self, pid: str) -> None:
         pdir = self._pdir(pid)
         shutil.rmtree(pdir)
+        snaps = self.root / "snapshots" / pid
+        if snaps.is_dir():
+            shutil.rmtree(snaps, ignore_errors=True)
         self._versions.pop(pid, None)
 
     # ------------------------------------------------------------------- files
@@ -345,6 +348,83 @@ class Store:
                 if entry["type"] == "file":
                     zf.write(pdir / entry["path"], entry["path"])
         return buf.getvalue()
+
+    # --------------------------------------------------------------- snapshots
+
+    SNAP_KEEP = 20
+    _SNAP_ID = re.compile(r"^\d{8}-\d{12}-[0-9a-f]{6}$")
+
+    def _snap_dir(self, pid: str) -> Path:
+        self._pdir(pid)  # 404 for unknown projects
+        return self.root / "snapshots" / pid
+
+    def snapshot(self, pid: str, label: str = "", keep: int | None = None) -> dict:
+        """Freeze the project into a zip under data/forge/snapshots/."""
+        data = self.export_zip(pid)
+        files = sum(1 for e in self.tree(pid) if e["type"] == "file")
+        # Microsecond timestamps keep ids strictly sortable (newest first).
+        sid = (datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S%f")
+               + "-" + os.urandom(3).hex())
+        sdir = self._snap_dir(pid)
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / f"{sid}.zip").write_bytes(data)
+        meta = {"id": sid, "label": (label or "").strip()[:80],
+                "created": _now(), "size": len(data), "files": files}
+        (sdir / f"{sid}.json").write_text(json.dumps(meta), "utf-8")
+        for old in self.list_snapshots(pid)[keep or self.SNAP_KEEP:]:
+            self.delete_snapshot(pid, old["id"])
+        return meta
+
+    def list_snapshots(self, pid: str) -> list[dict]:
+        sdir = self._snap_dir(pid)
+        out = []
+        if sdir.is_dir():
+            for meta_path in sdir.glob("*.json"):
+                try:
+                    out.append(json.loads(meta_path.read_text("utf-8")))
+                except (OSError, ValueError):
+                    continue
+        out.sort(key=lambda m: m.get("id", ""), reverse=True)
+        return out
+
+    def _snap_zip(self, pid: str, sid: str) -> Path:
+        if not self._SNAP_ID.match(sid or ""):
+            raise StoreError("invalid snapshot id", 400)
+        path = self._snap_dir(pid) / f"{sid}.zip"
+        if not path.is_file():
+            raise StoreError(f"no such snapshot: {sid}", 404)
+        return path
+
+    def restore_snapshot(self, pid: str, sid: str) -> dict:
+        """Replace the project's files with a snapshot's contents."""
+        zip_path = self._snap_zip(pid, sid)
+        pdir = self._pdir(pid)
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [n for n in zf.namelist() if not n.endswith("/")]
+            # Validate every entry through the jail BEFORE touching anything,
+            # so a tampered zip can't write outside the project (zip-slip).
+            for name in names:
+                self.resolve(pid, name)
+            for child in list(pdir.iterdir()):
+                if child.name == META:
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            for name in names:
+                target = self.resolve(pid, name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(name))
+        self._touch(pid)
+        return {"restored": sid, "files": len(names)}
+
+    def delete_snapshot(self, pid: str, sid: str) -> None:
+        zip_path = self._snap_zip(pid, sid)
+        zip_path.unlink()
+        meta = zip_path.with_suffix(".json")
+        if meta.exists():
+            meta.unlink()
 
     # ------------------------------------------------------- change tracking
 

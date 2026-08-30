@@ -230,6 +230,69 @@ class TestSearch(Base):
             self.store.search(self.pid, "   ")
 
 
+class TestSnapshots(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.pid = self.store.create("Snappy", "blank")["id"]
+        self.store.write_file(self.pid, "a.txt", "version one")
+
+    def test_snapshot_restore_roundtrip(self):
+        snap = self.store.snapshot(self.pid, "before edits")
+        self.assertEqual(snap["label"], "before edits")
+        self.store.write_file(self.pid, "a.txt", "version two")
+        self.store.write_file(self.pid, "new.txt", "added later")
+        v_before = self.store.version(self.pid)
+        result = self.store.restore_snapshot(self.pid, snap["id"])
+        self.assertGreaterEqual(result["files"], 2)  # a.txt + README.md
+        self.assertEqual(self.store.read_file(self.pid, "a.txt")["content"],
+                         "version one")
+        paths = {e["path"] for e in self.store.tree(self.pid)}
+        self.assertNotIn("new.txt", paths)  # post-snapshot file removed
+        self.assertGreater(self.store.version(self.pid), v_before)
+        # Project metadata survives the restore untouched.
+        self.assertEqual(self.store.get_meta(self.pid)["name"], "Snappy")
+
+    def test_listing_is_newest_first_and_pruned(self):
+        ids = [self.store.snapshot(self.pid, f"s{i}", keep=3)["id"]
+               for i in range(5)]
+        listed = [s["id"] for s in self.store.list_snapshots(self.pid)]
+        self.assertEqual(len(listed), 3)
+        self.assertEqual(listed[0], ids[-1])
+        self.assertNotIn(ids[0], listed)
+
+    def test_zip_slip_restore_refused(self):
+        import io
+        import zipfile
+        snap = self.store.snapshot(self.pid)
+        evil = io.BytesIO()
+        with zipfile.ZipFile(evil, "w") as zf:
+            zf.writestr("../evil.txt", "escape!")
+        zip_path = self.store._snap_zip(self.pid, snap["id"])
+        zip_path.write_bytes(evil.getvalue())
+        with self.assertRaises(StoreError):
+            self.store.restore_snapshot(self.pid, snap["id"])
+        self.assertFalse((Path(self.tmp.name) / "evil.txt").exists())
+        # The refused restore must not have wiped the project either.
+        self.assertEqual(self.store.read_file(self.pid, "a.txt")["content"],
+                         "version one")
+
+    def test_delete_and_bad_ids(self):
+        snap = self.store.snapshot(self.pid)
+        self.store.delete_snapshot(self.pid, snap["id"])
+        self.assertEqual(self.store.list_snapshots(self.pid), [])
+        with self.assertRaises(StoreError):
+            self.store.restore_snapshot(self.pid, snap["id"])
+        with self.assertRaises(StoreError):
+            self.store.restore_snapshot(self.pid, "../../etc")
+
+    def test_snapshots_removed_with_project(self):
+        self.store.snapshot(self.pid)
+        sdir = Path(self.tmp.name) / "snapshots" / self.pid
+        self.assertTrue(sdir.is_dir())
+        self.store.delete_project(self.pid)
+        self.assertFalse(sdir.exists())
+
+
 class TestSettings(Base):
     def test_settings_roundtrip_and_key_removal(self):
         self.store.update_settings({"anthropic_api_key": "sk-test", "model": "m"})

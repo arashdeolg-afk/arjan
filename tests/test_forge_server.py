@@ -197,6 +197,27 @@ class TestProjectApi(ServerTest):
             "GET", f"/api/projects/{pid}/file?path=../../settings.json")
         self.assertEqual(status, 403)
 
+    def test_snapshot_api_roundtrip(self):
+        pid = self.make_project("Snapper")["id"]
+        status, snap = self.json_request(
+            "POST", f"/api/projects/{pid}/snapshots", {"label": "checkpoint"})
+        self.assertEqual(status, 201)
+        self.json_request("PUT", f"/api/projects/{pid}/file?path=index.html",
+                          {"content": "<h1>changed</h1>"})
+        status, body = self.json_request(
+            "POST", f"/api/projects/{pid}/snapshots/{snap['id']}/restore", {})
+        self.assertEqual(status, 200)
+        _, f = self.json_request("GET",
+                                 f"/api/projects/{pid}/file?path=index.html")
+        self.assertIn("Aurora", f["content"])
+        status, listing = self.json_request("GET",
+                                            f"/api/projects/{pid}/snapshots")
+        self.assertEqual([s["label"] for s in listing["snapshots"]],
+                         ["checkpoint"])
+        status, _ = self.json_request(
+            "DELETE", f"/api/projects/{pid}/snapshots/{snap['id']}")
+        self.assertEqual(status, 200)
+
     def test_search_endpoint(self):
         pid = self.make_project("Searchy")["id"]
         status, body = self.json_request(

@@ -31,6 +31,16 @@ PYTHONPATH=src python3 -m forge serve --port 9000 --open
 Projects are plain directories under `data/forge/projects/<id>/` — open
 them in any other editor, or **Export zip** to ship them anywhere.
 
+## Snapshots (time travel)
+
+The clock button freezes the whole project into a snapshot (a zip under
+`data/forge/snapshots/`, last 20 kept). One is taken automatically
+before every AI apply and before every restore, so **any AI edit — and
+any restore — can be undone**. Restoring validates every zip entry
+through the path jail first, then replaces the project's files while
+leaving its settings untouched. No git required; it works anywhere
+Python runs.
+
 ## Server apps and the proxy
 
 A project with an **app port** set (project settings; the Web server
@@ -119,4 +129,5 @@ do that on networks you trust.
   service worker) today; a dedicated mobile app can reuse the JSON+SSE
   API as-is.
 - Proxy: WebSocket passthrough for apps that use them.
-- Git integration: init/commit/history per project.
+- Optional git integration on top of snapshots, for users who want
+  real branches and remotes.

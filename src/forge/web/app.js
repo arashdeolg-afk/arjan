@@ -82,6 +82,7 @@ const I = {
   terminal: svg('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
   dots: svg('<circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>'),
+  clock: svg('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'),
   check: svg('<polyline points="20 6 9 17 4 12"/>'),
   globe: svg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'),
 };
@@ -680,6 +681,7 @@ async function renderWorkspace(pid) {
       <div class="spacer"></div>
       <button class="btn primary sm" id="w-run">${I.play}<span>Run</span></button>
       <button class="btn icon ghost" id="w-console" title="Toggle console">${I.terminal}</button>
+      <button class="btn icon ghost" id="w-history" title="Snapshots / history">${I.clock}</button>
       <button class="btn icon ghost" id="w-export" title="Download zip">${I.download}</button>
       <button class="btn icon ghost" id="w-settings" title="Project settings">${I.gear}</button>
     </header>
@@ -1454,6 +1456,9 @@ async function renderWorkspace(pid) {
   async function applyFiles(files) {
     if (!files.length) return;
     try {
+      // Safety net: every AI apply can be undone from Snapshots.
+      await api("POST", `/api/projects/${pid}/snapshots`,
+        { label: "before AI edit" }).catch(() => {});
       await api("POST", `/api/projects/${pid}/files`, { files });
       toast(`Applied ${files.length} file${files.length > 1 ? "s" : ""}`, "ok");
       for (const f of files) {
@@ -1468,6 +1473,91 @@ async function renderWorkspace(pid) {
       await refreshTree();
       reloadPreview();
     } catch (e) { toast(e.message, "err"); }
+  }
+
+  /* ----- snapshots / history ----- */
+
+  async function reloadOpenTabs() {
+    for (const tab of [...ws.tabs]) {
+      try {
+        const d = await api("GET",
+          `/api/projects/${pid}/file?path=${encodeURIComponent(tab.path)}`);
+        if (tab.ed && !d.binary) {
+          tab.ed.setValue(d.content);
+          tab.savedValue = d.content;
+          tab.dirty = false;
+        }
+      } catch { closeTab(tab, true); }
+    }
+    renderTabs();
+  }
+
+  async function historyModal() {
+    const { snapshots } = await api("GET", `/api/projects/${pid}/snapshots`);
+    const m = modal({
+      title: "Snapshots",
+      body: (bodyEl) => {
+        bodyEl.innerHTML = `
+          <p class="hint">A snapshot freezes every file in the project.
+            One is taken automatically before each AI apply, so anything
+            can be undone. The last 20 are kept.</p>
+          <div class="row" style="margin-bottom:12px">
+            <input class="input" id="snap-label" placeholder="Label (optional)"
+                   spellcheck="false">
+            <button class="btn primary" id="snap-take">Snapshot now</button>
+          </div>
+          <div id="snap-list"></div>`;
+        const list = $("#snap-list", bodyEl);
+        const renderList = (snaps) => {
+          list.innerHTML = snaps.length ? "" :
+            '<p class="hint">No snapshots yet.</p>';
+          for (const s of snaps) {
+            const row = el("div", { class: "snap-row" }, `
+              <div class="snap-info">
+                <b>${esc(s.label || "snapshot")}</b>
+                <span class="hint-inline">${timeAgo(s.created)} ·
+                  ${s.files} files · ${fmtSize(s.size)}</span>
+              </div>
+              <button class="btn sm" data-act="restore">Restore</button>
+              <button class="btn icon ghost sm" data-act="del" title="Delete">${I.trash}</button>`);
+            row.querySelector('[data-act="restore"]').addEventListener("click", async () => {
+              if (!await confirmModal("Restore snapshot",
+                `Replace all current files with "${s.label || "this snapshot"}" from ${timeAgo(s.created)}? A safety snapshot of the current state is taken first.`,
+                { ok: "Restore" })) return;
+              try {
+                await api("POST", `/api/projects/${pid}/snapshots`,
+                  { label: "before restore" });
+                await api("POST",
+                  `/api/projects/${pid}/snapshots/${s.id}/restore`, {});
+                m.close();
+                toast("Snapshot restored", "ok");
+                await refreshTree();
+                await reloadOpenTabs();
+                reloadPreview();
+              } catch (e) { toast(e.message, "err"); }
+            });
+            row.querySelector('[data-act="del"]').addEventListener("click", async () => {
+              await api("DELETE", `/api/projects/${pid}/snapshots/${s.id}`);
+              const fresh = await api("GET", `/api/projects/${pid}/snapshots`);
+              renderList(fresh.snapshots);
+            });
+            list.appendChild(row);
+          }
+        };
+        renderList(snapshots);
+        $("#snap-take", bodyEl).addEventListener("click", async () => {
+          try {
+            await api("POST", `/api/projects/${pid}/snapshots`,
+              { label: $("#snap-label", bodyEl).value.trim() });
+            $("#snap-label", bodyEl).value = "";
+            const fresh = await api("GET", `/api/projects/${pid}/snapshots`);
+            renderList(fresh.snapshots);
+            toast("Snapshot taken", "ok");
+          } catch (e) { toast(e.message, "err"); }
+        });
+      },
+      actions: [{ label: "Close", kind: "ghost", fn: (close) => close() }],
+    });
   }
 
   /* ----- project settings ----- */
@@ -1579,6 +1669,7 @@ async function renderWorkspace(pid) {
   });
   $("#w-run").addEventListener("click", runOrStop);
   $("#w-console").addEventListener("click", () => showConsole());
+  $("#w-history").addEventListener("click", historyModal);
   $("#w-export").addEventListener("click", () => {
     location.href = `/api/projects/${pid}/export`;
   });

@@ -179,6 +179,15 @@ svg { width: 16px; height: 16px; flex: none; }
 .dl.del { background: #ff6b6b12; color: #ff9b9b; }
 .dl.skip { color: var(--faint); font-style: italic; padding: 2px 12px; }
 
+/* snapshots */
+.snap-row { display: flex; align-items: center; gap: 10px;
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 9px 12px; margin-bottom: 8px; }
+.snap-info { flex: 1; display: flex; flex-direction: column; gap: 1px;
+  overflow: hidden; }
+.snap-info b { font-size: 13px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+
 /* AI context popover */
 .ctx-files { max-height: 320px; overflow: auto; min-width: 250px; }
 .ctx-title { font: 600 12px var(--sans); color: var(--dim); padding: 6px 10px 8px;
