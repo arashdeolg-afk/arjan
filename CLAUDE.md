@@ -98,6 +98,21 @@ Each has a test written so the optimistic implementation fails it.
   prices and says so in the UI, the health endpoint and the admin console. Never
   present a simulated or stale price as live.
 
+## Web security invariants
+
+- **No inline event handlers or styles.** The CSP has no `unsafe-inline`, so an
+  `onclick=` or `style=` attribute is not merely unfashionable — it is dead
+  code the browser refuses to run. Bind behaviour with `data-confirm` /
+  `data-autosubmit` and the delegated listeners in `assets.py`. A test asserts
+  no rendered page contains one.
+- **Credentials never enter a URL.** Use `web/flash.py`, not `?ok=`. A secret
+  in a query string is a secret in the access log and the browser history.
+- **Anything reaching a header is sanitized.** `http.server` does no CRLF
+  filtering at all. Redirect targets go through `safe_redirect_target()`.
+- **API token scopes are enforced**, intersected with the owner's role, in
+  `User.permissions`. Storing a scope without enforcing it is worse than not
+  offering one.
+
 ## Units and currency, where the bugs live
 
 - `Instrument.adv` is in **tradeable units** (shares/coins/base currency), not
@@ -120,5 +135,5 @@ python3 -m deoltech admin create        # first administrator
 python3 -m deoltech serve               # http://127.0.0.1:8000
 python3 -m deoltech probe               # is Finviz reachable and parsing?
 python3 -m deoltech demo                # seed a demo account from replayed history
-python3 -m unittest discover -s tests   # 174 tests
+python3 -m unittest discover -s tests   # 187 tests
 ```

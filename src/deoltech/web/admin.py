@@ -25,6 +25,7 @@ from ..auth import (
 )
 from ..db import audit, audit_trail, get_setting, set_setting, stats
 from ..instruments import catalog
+from . import flash
 from .server import HttpError, Request, Response
 from .templates import (
     alert, badge, card, esc, money, pnl_class, signed, stat, table,
@@ -146,7 +147,7 @@ def users_page(request: Request) -> Response:
         role_form = f"""
         <form method="post" action="/admin/users/{u['id']}/role" class="m-0">
           <input type="hidden" name="csrf_token" value="{esc(csrf)}">
-          <select name="role" onchange="this.form.submit()" class="select-inline">
+          <select name="role" data-autosubmit class="select-inline">
             {''.join(f'<option value="{r}" {"selected" if u["role"] == r else ""}>{r}</option>'
                      for r in ("admin", "trader", "viewer"))}
           </select></form>"""
@@ -161,12 +162,12 @@ def users_page(request: Request) -> Response:
               {'Suspend' if u['status'] == 'active' else 'Reinstate'}</button>
           </form>
           <form method="post" action="/admin/users/{u['id']}/reset" class="m-0"
-                onsubmit="return confirm('Reset this user\\'s password? They will be signed out everywhere.')">
+                data-confirm="Reset this user&#39;s password? They will be signed out everywhere.">
             <input type="hidden" name="csrf_token" value="{esc(csrf)}">
             <button class="btn btn-sm">Reset password</button>
           </form>
           <form method="post" action="/admin/users/{u['id']}/delete" class="m-0"
-                onsubmit="return confirm('Permanently delete this user and every account, order and fill they own?')">
+                data-confirm="Permanently delete this user and every account, order and fill they own?">
             <input type="hidden" name="csrf_token" value="{esc(csrf)}">
             <button class="btn btn-sm btn-danger" {'disabled' if is_self else ''}>
               Delete</button>
@@ -241,8 +242,12 @@ def create_user_action(request: Request) -> Response:
         return _redirect("/admin/users", error=str(e))
     message = f"Created {user.username} ({user.role.value})."
     if generated:
-        message += (f" One-time password: {password} — copy it now, it is not "
-                    f"stored and cannot be shown again.")
+        # Via the one-shot store, never the URL: a password in a query string
+        # is a password in the access log.
+        flash.put(request.session_token,
+                  f"{message} One-time password: {password} — copy it now, it "
+                  f"is not stored and cannot be shown again.")
+        return Response.redirect("/admin/users")
     return _redirect("/admin/users", ok=message)
 
 
@@ -279,9 +284,10 @@ def reset_password_action(request: Request) -> Response:
         username = request.app.platform.username(uid)
     except (AuthError, ValueError) as e:
         return _redirect("/admin/users", error=str(e))
-    return _redirect("/admin/users",
-                     ok=f"New password for {username}: {password} — shown once. "
-                        f"They must change it at next sign-in.")
+    flash.put(request.session_token,
+              f"New password for {username}: {password} — shown once. "
+              f"They must change it at next sign-in.")
+    return Response.redirect("/admin/users")
 
 
 def delete_user_action(request: Request) -> Response:
@@ -328,7 +334,7 @@ def accounts_page(request: Request) -> Response:
             {'Resume' if halted else 'Halt'}</button></form>"""
         reset = f"""
         <form method="post" action="/admin/accounts/{a['id']}/reset" class="m-0"
-              onsubmit="return confirm('Delete all trading history on this account?')">
+              data-confirm="Delete all trading history on this account?">
           <input type="hidden" name="csrf_token" value="{esc(csrf)}">
           <button class="btn btn-sm btn-danger">Reset</button></form>"""
         rows.append([

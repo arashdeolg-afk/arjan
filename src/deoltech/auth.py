@@ -72,6 +72,38 @@ class Role(str, Enum):
         return permission in ROLE_PERMISSIONS[self]
 
 
+# What each API-token scope grants. A token's effective permissions are its
+# scopes INTERSECTED with the owner's role, so a token can never exceed the
+# person who issued it — and a "read" token cannot trade even for an admin.
+SCOPE_PERMISSIONS: dict[str, frozenset[str]] = {
+    "read": frozenset({
+        "view.market", "view.account", "view.blotter", "view.analytics",
+        "run.backtest",
+    }),
+    "trade": frozenset({
+        "trade.submit", "trade.cancel", "account.manage", "watchlist.edit",
+    }),
+    # Deliberately separate and never implied by "read" or "trade": issuing a
+    # token that can create users should be an explicit, conscious act.
+    "admin": frozenset({
+        "admin.users", "admin.accounts", "admin.settings", "admin.audit",
+        "admin.halt", "admin.impersonate.readonly", "admin.feeds",
+    }),
+}
+VALID_SCOPES = frozenset(SCOPE_PERMISSIONS)
+
+
+def parse_scopes(raw: str) -> tuple[str, ...]:
+    """Normalize a scope string, dropping anything unrecognized.
+
+    Unknown scopes are discarded rather than rejected so a typo narrows a
+    token instead of widening it. An empty result falls back to "read".
+    """
+    found = [s.strip().lower() for s in (raw or "").replace(" ", ",").split(",")]
+    kept = tuple(dict.fromkeys(s for s in found if s in VALID_SCOPES))
+    return kept or ("read",)
+
+
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.VIEWER: frozenset({
         "view.market", "view.account", "view.blotter", "view.analytics",
@@ -112,6 +144,9 @@ class User:
     created_at: str
     last_login_at: str | None = None
     must_change_password: bool = False
+    # Set only when this identity came from an API token. None means an
+    # interactive session, which is bounded by the role alone.
+    token_scopes: tuple[str, ...] | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -121,13 +156,34 @@ class User:
     def is_active(self) -> bool:
         return self.status == "active"
 
+    @property
+    def permissions(self) -> frozenset[str]:
+        """Effective permissions: the role, narrowed by any token scopes."""
+        granted = ROLE_PERMISSIONS[self.role]
+        if self.token_scopes is None:
+            return granted
+        from_scopes = frozenset().union(
+            *(SCOPE_PERMISSIONS.get(s, frozenset()) for s in self.token_scopes))
+        return granted & from_scopes
+
     def can(self, permission: str) -> bool:
-        return self.is_active and self.role.can(permission)
+        return self.is_active and permission in self.permissions
+
+    def with_scopes(self, scopes: tuple[str, ...]) -> "User":
+        from dataclasses import replace as _replace
+        return _replace(self, token_scopes=scopes)
 
     def require(self, permission: str) -> None:
-        if not self.can(permission):
+        if self.can(permission):
+            return
+        if self.token_scopes is not None and permission in ROLE_PERMISSIONS[self.role]:
+            # The role allows it; the token does not. Say which, so the caller
+            # knows to mint a wider token rather than chase a role change.
             raise PermissionDenied(
-                f"{self.role.value} accounts may not perform '{permission}'")
+                f"this API token's scope ({', '.join(self.token_scopes)}) does "
+                f"not allow '{permission}'")
+        raise PermissionDenied(
+            f"{self.role.value} accounts may not perform '{permission}'")
 
     def to_dict(self) -> dict:
         return {
@@ -135,7 +191,8 @@ class User:
             "display_name": self.display_name, "role": self.role.value,
             "status": self.status, "created_at": self.created_at,
             "last_login_at": self.last_login_at, "is_admin": self.is_admin,
-            "permissions": sorted(ROLE_PERMISSIONS[self.role]),
+            "permissions": sorted(self.permissions),
+            "token_scopes": list(self.token_scopes) if self.token_scopes else None,
         }
 
 
@@ -538,6 +595,7 @@ def create_api_token(conn: sqlite3.Connection, user: User, name: str,
                      scopes: str = "read") -> str:
     """Issue a bearer token. The plaintext is returned once and never stored."""
     user.require("token.create")
+    granted = parse_scopes(scopes)
     raw = secrets.token_urlsafe(32)
     token = f"dt_{raw}"
     with transaction(conn):
@@ -545,9 +603,10 @@ def create_api_token(conn: sqlite3.Connection, user: User, name: str,
             """INSERT INTO api_tokens (user_id, name, token_hash, prefix,
                                        scopes, created_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (user.id, name[:60], _hash_token(token), token[:11], scopes, now_iso()))
+            (user.id, name[:60], _hash_token(token), token[:11],
+             ",".join(granted), now_iso()))
     audit(conn, "token.create", actor_id=user.id, actor_name=user.username,
-          target=name, detail=f"scopes={scopes}", severity="warning")
+          target=name, detail=f"scopes={','.join(granted)}", severity="warning")
     return token
 
 
@@ -565,7 +624,10 @@ def token_user(conn: sqlite3.Connection, token: str | None) -> User | None:
     with transaction(conn):
         conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
                      (now_iso(), row["id"]))
-    return get_user(conn, row["user_id"])
+    # Bind the token's scopes to the identity. Returning the bare user here
+    # would hand every token the full power of its owner's role — which is
+    # exactly what the "read" option in the UI promises it does not do.
+    return get_user(conn, row["user_id"]).with_scopes(parse_scopes(row["scopes"]))
 
 
 def list_api_tokens(conn: sqlite3.Connection, user_id: int) -> list[dict]:

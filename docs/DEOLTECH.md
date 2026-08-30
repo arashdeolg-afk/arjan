@@ -29,7 +29,7 @@ python3 -m deoltech quote AAPL BTCUSD EURUSD    # live prices
 python3 -m deoltech probe                       # is Finviz reachable?
 python3 -m deoltech backtest sma-crossover AAPL --param fast=10 --param slow=30
 python3 -m deoltech backup /var/backups         # consistent, verified, compressed
-python3 -m unittest discover -s tests           # 141 tests, no network
+python3 -m unittest discover -s tests           # 154 tests, no network
 ```
 
 ---
@@ -289,6 +289,15 @@ Three roles:
   request.
 - **A strict Content-Security-Policy** with no `unsafe-inline` and no external
   origins. There is not one inline `style` or `script` in the application.
+- **API tokens are scoped, and the scope is enforced.** A token's effective
+  permissions are its scopes (`read`, `trade`, `admin`) intersected with the
+  owner's role, so a token can never exceed the person who issued it and a
+  read-only token cannot trade even for an administrator. Unknown scopes
+  narrow rather than widen.
+- **Credentials never travel in a URL.** A new password or API token is shown
+  through a one-shot server-side store, not a redirect query string — which
+  would put it in the access log, nginx's log, and the browser's history.
+  Query strings are redacted from the request log regardless.
 - **Every administrative action is audited** with actor, target, detail and IP.
 
 Two things an administrator deliberately **cannot** do: read a user's password
@@ -366,6 +375,11 @@ backup.
 Every endpoint accepts a session cookie or `Authorization: Bearer dt_…`, under
 the same permission checks as the UI.
 
+Tokens are scoped: `read` grants the view and backtest permissions, `trade`
+adds order entry and account management, and `admin` — never implied by the
+others — adds the administrative ones. The effective set is always the scope
+intersected with the owner's role.
+
 ```
 GET  /api/health                     liveness; no auth
 GET  /api/quotes?symbols=A,B,C       batch quotes + feed status
@@ -424,7 +438,7 @@ src/deoltech/
     api.py          JSON API
     templates.py    HTML rendering
     assets.py       stylesheet and client script
-tests/              141 tests, no network, no real database
+tests/              154 tests, no network, no real database
 deploy/             Dockerfile, compose, nginx, systemd, backups
 ```
 

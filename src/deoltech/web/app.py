@@ -23,11 +23,13 @@ from ..auth import (
 )
 from ..db import audit, connect, get_setting, set_setting
 from . import admin as admin_views
+from . import flash
 from . import api as api_views
 from . import views
 from .assets import CSS, JS
 from .server import (
-    SESSION_COOKIE, HttpError, Request, Response, WebApp, serve,
+    SESSION_COOKIE, HttpError, Request, Response, WebApp,
+    safe_redirect_target, serve,
 )
 from .templates import FAVICON, alert, esc, layout, login_page
 
@@ -223,9 +225,9 @@ def build_app(platform: Platform, *, secret: str = "",
         except AuthError as e:
             return Response.html(login_page(error=str(e), username=username), 401)
 
-        target = request.get("next", "/")
-        if not target.startswith("/") or target.startswith("//"):
-            target = "/"          # never redirect off-site from a login
+        # Never redirect off-site from a login, and never let a decoded CRLF
+        # reach the Location header.
+        target = safe_redirect_target(request.get("next", "/"))
         if user.must_change_password:
             target = "/profile?warn=" + quote(
                 "Your password was set by an administrator. Change it now.")
@@ -302,6 +304,10 @@ def build_app(platform: Platform, *, secret: str = "",
 
     @app.post("/profile/risk")
     def _save_risk(request):
+        # Its sibling _save_watchlist checks; this one did not. A viewer could
+        # rewrite their own risk limits — harmless today because trade.submit
+        # still gates order entry, but the check belongs here.
+        request.user.require("account.manage")
         changes = {
             "max_order_notional": request.get_float("max_order_notional", 0) or None,
             "max_position_notional": request.get_float("max_position_notional", 0) or None,
@@ -324,8 +330,12 @@ def build_app(platform: Platform, *, secret: str = "",
                                      request.get("scopes", "read"))
         except (AuthError, PermissionDenied) as e:
             return Response.redirect("/profile?error=" + quote(str(e)))
-        return Response.redirect("/profile?ok=" + quote(
-            f"Token created: {token} — copy it now, it is never shown again."))
+        # Same reasoning as the password paths: a bearer token in a URL is a
+        # bearer token in the access log and the browser's history.
+        flash.put(request.session_token,
+                  f"Token created: {token} — copy it now, it is never shown "
+                  f"again.")
+        return Response.redirect("/profile")
 
     @app.post("/profile/tokens/<int:token_id>/revoke")
     def _revoke_token(request):

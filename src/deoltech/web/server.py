@@ -144,6 +144,7 @@ class Response:
     def set_cookie(self, name: str, value: str, *, max_age: int | None = None,
                    http_only: bool = True, secure: bool = False,
                    same_site: str = "Lax", path: str = "/") -> "Response":
+        name, value = sanitize_header_value(name), sanitize_header_value(value)
         parts = [f"{name}={value}", f"Path={path}", f"SameSite={same_site}"]
         if max_age is not None:
             parts.append(f"Max-Age={max_age}")
@@ -163,6 +164,34 @@ def _json_default(obj):
     if hasattr(obj, "__dict__"):
         return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
     return str(obj)
+
+
+# CR and LF terminate a header. `http.server.send_header` does no sanitising
+# whatsoever — it formats "%s: %s\r\n" and encodes latin-1 — so anything
+# reaching a header value has to be cleaned here or an attacker who controls
+# it can inject headers and forge an entire second response.
+_HEADER_UNSAFE = re.compile(r"[\r\n\x00]")
+
+
+def sanitize_header_value(value: object) -> str:
+    """Strip characters that would let a value break out of its header."""
+    return _HEADER_UNSAFE.sub("", str(value))
+
+
+def safe_redirect_target(target: str, fallback: str = "/") -> str:
+    """Validate a caller-supplied redirect path.
+
+    Only a site-relative path is allowed, and only from a conservative
+    character set. A prefix check alone is not enough: `/\evil.com` and
+    `/%09/evil.com` both start with a single slash, and browsers normalise
+    them to `//evil.com` — an off-site redirect. Percent-decoding also means
+    a CRLF can arrive already decoded.
+    """
+    if not target or not target.startswith("/") or target.startswith(("//", "/\\")):
+        return fallback
+    if not re.fullmatch(r"/[A-Za-z0-9/_.~\-]*(\?[A-Za-z0-9/_.~\-&=%+]*)?", target):
+        return fallback
+    return target
 
 
 class HttpError(Exception):
@@ -392,7 +421,15 @@ class _Handler(BaseHTTPRequestHandler):
     trust_proxy: bool = False
 
     def log_message(self, fmt: str, *args) -> None:
-        log.info("%s %s", self.address_string(), fmt % args)
+        # Log the path but never the query string. Nothing sensitive should be
+        # in a URL, and this makes that a property of the server rather than a
+        # promise every future handler has to keep.
+        line = fmt % args
+        if "?" in line:
+            head, _, tail = line.partition("?")
+            rest = tail.split(" ", 1)
+            line = head + ("?<redacted> " + rest[1] if len(rest) > 1 else "?<redacted>")
+        log.info("%s %s", self.address_string(), line)
 
     def _client_ip(self) -> str:
         if self.trust_proxy:
@@ -481,10 +518,14 @@ class _Handler(BaseHTTPRequestHandler):
             if self.app.secure_cookies:
                 self.send_header("Strict-Transport-Security",
                                  "max-age=31536000; includeSubDomains")
+            # Last line of defence: every header leaving this server is
+            # stripped of CR/LF here, so a handler that forgets cannot split
+            # the response.
             for key, value in response.headers.items():
-                self.send_header(key, value)
+                self.send_header(sanitize_header_value(key),
+                                 sanitize_header_value(value))
             for cookie in response.cookies:
-                self.send_header("Set-Cookie", cookie)
+                self.send_header("Set-Cookie", sanitize_header_value(cookie))
             self.end_headers()
             if body:
                 self.wfile.write(body)

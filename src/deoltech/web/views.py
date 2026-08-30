@@ -58,7 +58,16 @@ def _quote_or_none(request: Request, symbol: str):
 
 
 def _flash(request: Request) -> str:
-    """Render ?ok= / ?error= query parameters as an alert."""
+    """Render a pending one-shot message, or an ?ok=/?error= query parameter.
+
+    The one-shot store is checked first because that is where anything
+    sensitive lives — a new password or API token must never ride in a URL,
+    which would put it in the access log and the browser's history.
+    """
+    from . import flash
+    if pending := flash.take(request.session_token):
+        kind, message = pending
+        return alert(message[:600], kind)
     if msg := request.query.get("error"):
         return alert(msg[:400], "error")
     if msg := request.query.get("ok"):
@@ -127,7 +136,7 @@ def dashboard(request: Request) -> Response:
                  '<form method="post" action="/actions/flatten" class="m-0">'
                  f'<input type="hidden" name="csrf_token" value="{esc(request.app.csrf_token(request.session_token))}">'
                  '<button class="btn btn-sm btn-danger" type="submit" '
-                 'onclick="return confirm(\'Close every open position at the market?\')">'
+                 'data-confirm="Close every open position at the market?">'
                  'Flatten all</button></form>'),
         flush=True, subtitle=f"{len(positions)} open")
 
@@ -668,7 +677,7 @@ def backtest_page(request: Request) -> Response:
           <input id="bt-symbol" name="symbol" value="{esc(symbol)}"></div>
         <div class="field"><label for="bt-strategy">Strategy</label>
           <select id="bt-strategy" name="strategy"
-                  onchange="this.form.submit()">{options}</select></div>
+                  data-autosubmit>{options}</select></div>
       </div>
       <div class="field-row">
         <div class="field"><label for="bt-interval">Interval</label>
@@ -927,7 +936,7 @@ def profile_page(request: Request) -> Response:
       <p class="fs-note">Deletes every order, fill and position on this
       account and restores the opening balance. This cannot be undone.</p>
       <form method="post" action="/profile/reset"
-            onsubmit="return confirm('Delete all trading history and reset the balance?')">
+            data-confirm="Delete all trading history and reset the balance?">
         <input type="hidden" name="csrf_token" value="{esc(csrf)}">
         <button class="btn btn-danger" type="submit">Reset account</button>
       </form>""")

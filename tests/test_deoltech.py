@@ -1155,6 +1155,93 @@ class TestAuth(unittest.TestCase):
         self.assertIn("system.bootstrap", actions)
 
 
+class TestApiTokenScopes(unittest.TestCase):
+    """A token must never carry more authority than its scope advertises.
+
+    The UI offers "read" and "read, trade" as a security choice. If the scope
+    is stored and displayed but not enforced, that choice is a lie and a
+    read-only token handed to a monitoring script is full account access.
+    """
+
+    def setUp(self):
+        from deoltech import auth, db
+        self.auth = auth
+        self.conn = db.connect(os.path.join(_TMPDIR, f"scopes-{id(self)}.db"))
+        self.admin, _ = auth.bootstrap_admin(self.conn, "scoperoot")
+
+    def token_for(self, user, scopes):
+        raw = self.auth.create_api_token(self.conn, user, f"t-{scopes}", scopes)
+        return self.auth.token_user(self.conn, raw)
+
+    def test_read_token_cannot_trade_or_administer(self):
+        identity = self.token_for(self.admin, "read")
+        self.assertTrue(identity.can("view.market"))
+        self.assertTrue(identity.can("run.backtest"))
+        self.assertFalse(identity.can("trade.submit"))
+        self.assertFalse(identity.can("admin.users"))
+
+    def test_trade_token_still_cannot_administer(self):
+        identity = self.token_for(self.admin, "read,trade")
+        self.assertTrue(identity.can("trade.submit"))
+        self.assertFalse(identity.can("admin.users"))
+
+    def test_a_token_cannot_exceed_its_owners_role(self):
+        trader = self.auth.create_user(
+            self.conn, "scopetrader", "Tr@derPass2026!",
+            role=self.auth.Role.TRADER, actor=self.admin)
+        identity = self.token_for(trader, "read,trade,admin")
+        self.assertTrue(identity.can("trade.submit"))
+        self.assertFalse(identity.can("admin.users"),
+                         "a trader's token must not grant admin permissions")
+
+    def test_unknown_scopes_narrow_rather_than_widen(self):
+        identity = self.token_for(self.admin, "wat,*,../admin")
+        self.assertEqual(identity.token_scopes, ("read",))
+        self.assertFalse(identity.can("trade.submit"))
+
+    def test_interactive_sessions_are_unaffected(self):
+        _, token = self.auth.login(
+            self.conn, "scoperoot",
+            self.auth.reset_password(self.conn, self.admin, self.admin.id,
+                                     "Sess1on&Password!"))
+        session_user = self.auth.session_user(self.conn, token)
+        self.assertIsNone(session_user.token_scopes)
+        self.assertTrue(session_user.can("admin.users"))
+
+    def test_denial_message_names_the_token_not_the_role(self):
+        identity = self.token_for(self.admin, "read")
+        with self.assertRaises(self.auth.PermissionDenied) as ctx:
+            identity.require("admin.users")
+        self.assertIn("token", str(ctx.exception).lower())
+
+
+class TestHeaderInjection(unittest.TestCase):
+    """`http.server.send_header` does no sanitising at all — it formats
+    "%s: %s\r\n" and encodes latin-1 — so anything reaching a header value
+    must be cleaned first or an attacker can forge a whole second response."""
+
+    def test_redirect_targets_reject_off_site_and_crlf(self):
+        from deoltech.web.server import safe_redirect_target
+        for hostile in ("//evil.com", "/\\evil.com", "/\t/evil.com",
+                        "/\r\nX-Injected: yes", "https://evil.com", "",
+                        "/a\r\nSet-Cookie: sid=attacker"):
+            with self.subTest(target=hostile):
+                self.assertEqual(safe_redirect_target(hostile), "/")
+
+    def test_legitimate_paths_survive(self):
+        from deoltech.web.server import safe_redirect_target
+        for good in ("/", "/positions", "/terminal?symbol=AAPL"):
+            self.assertEqual(safe_redirect_target(good), good)
+
+    def test_header_values_are_stripped_of_crlf(self):
+        from deoltech.web.server import Response, sanitize_header_value
+        self.assertNotIn("\r", sanitize_header_value("a\r\nb"))
+        self.assertNotIn("\n", sanitize_header_value("a\r\nb"))
+        cookie = Response.redirect("/").set_cookie("s", "v\r\nX-Evil: 1").cookies[0]
+        self.assertNotIn("\r", cookie)
+        self.assertNotIn("\n", cookie)
+
+
 # ============================================================== persistence
 
 
@@ -1407,6 +1494,55 @@ class TestWebApp(unittest.TestCase):
         response = self.request("/api/orders", "POST", {
             "symbol": "BTCUSD", "side": "buy", "qty": "0.01",
             "csrf_token": self.app.csrf_token(token)}, token=token)
+        self.assertEqual(response.status, 403)
+
+    def test_a_reset_password_never_appears_in_a_url(self):
+        """A credential in a redirect URL is a credential in the access log,
+        in nginx's log, and in the browser's history. It goes through the
+        one-shot flash store instead."""
+        from deoltech.auth import Role, create_user, get_user
+        from deoltech.web import flash
+        conn = self.platform.conn()
+        target = create_user(conn, "resettarget", "T@rgetPass2026!",
+                             role=Role.TRADER, actor=get_user(conn, 1))
+        response = self.request(f"/admin/users/{target.id}/reset", "POST",
+                                {"csrf_token": self.csrf}, token=self.token)
+        location = response.headers.get("Location", "")
+        self.assertNotIn("password", location.lower())
+        self.assertNotIn("?", location, "nothing sensitive should ride in a URL")
+        pending = flash.take(self.token)
+        self.assertIsNotNone(pending, "the password must be waiting in the store")
+        self.assertIn("New password for resettarget", pending[1])
+
+    def test_no_inline_event_handlers_survive_in_rendered_html(self):
+        """The CSP forbids inline handlers, so any that appear are dead code.
+        That is how the admin role dropdown silently stopped submitting."""
+        import re
+        pattern = re.compile(rb'\son(?:click|change|submit|input|load)\s*=')
+        for path in ("/", "/positions", "/orders", "/profile", "/admin/users",
+                     "/admin/accounts", "/terminal"):
+            with self.subTest(path=path):
+                body = self.request(path, token=self.token).body
+                self.assertIsNone(pattern.search(body),
+                                  f"{path} contains an inline event handler, "
+                                  f"which the CSP will silently block")
+
+    def test_login_next_parameter_cannot_redirect_off_site(self):
+        from deoltech.auth import login
+        response = self.request(
+            "/login?next=//evil.com", "POST",
+            {"username": "arjan", "password": "Deol&Tech2026x!"})
+        self.assertEqual(response.headers.get("Location"), "/")
+
+    def test_saving_risk_limits_requires_permission(self):
+        from deoltech.auth import Role, create_user, get_user, login
+        conn = self.platform.conn()
+        create_user(conn, "riskviewer", "R!skViewer2026x", role=Role.VIEWER,
+                    actor=get_user(conn, 1))
+        _, token = login(conn, "riskviewer", "R!skViewer2026x")
+        response = self.request("/profile/risk", "POST",
+                                {"csrf_token": self.app.csrf_token(token),
+                                 "daily_loss_limit": "0"}, token=token)
         self.assertEqual(response.status, 403)
 
     def test_non_admins_cannot_reach_the_admin_console(self):

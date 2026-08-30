@@ -389,6 +389,15 @@ JS = r"""
   const $  = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 
+  /* Every server-supplied string concatenated into innerHTML goes through
+     this. Symbols are user-created (any string resolves to an instrument), so
+     without it a crafted symbol is stored XSS with only the CSP in the way. */
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
   /* --------------------------------------------------- number formatting */
   function money(v, dp) {
     if (v === null || v === undefined || isNaN(v)) return "—";
@@ -460,7 +469,7 @@ JS = r"""
         item.href = "/terminal?symbol=" + encodeURIComponent(sym);
         const chg = q.change_pct;
         item.innerHTML =
-          '<span class="tsym">' + sym + '</span>' +
+          '<span class="tsym">' + esc(sym) + '</span>' +
           '<span>' + money(q.last, q.price_precision) + '</span>' +
           '<span class="' + cls(chg) + '">' + signed(chg, 2) + '%</span>';
         bar.appendChild(item);
@@ -477,7 +486,7 @@ JS = r"""
       label.textContent = feed.degraded
         ? "SIMULATED — live feed unreachable"
         : (feed.ok ? (feed.source || feed.name) : "feed down");
-      label.title = feed.last_error || "";
+      label.title = feed.last_error || "";   /* textContent above, so safe */
     }
   }
 
@@ -519,16 +528,19 @@ JS = r"""
     }
     body.innerHTML = rows.map(function (p) {
       return '<tr>' +
-        '<td><a href="/terminal?symbol=' + p.symbol + '"><strong>' + p.symbol + '</strong></a>' +
-        ' <span class="badge badge-' + (p.side === "long" ? "up" : "down") + '">' + p.side + '</span></td>' +
-        '<td class="num">' + p.qty_fmt + '</td>' +
+        '<td><a href="/terminal?symbol=' + encodeURIComponent(p.symbol) + '"><strong>' +
+          esc(p.symbol) + '</strong></a>' +
+        ' <span class="badge badge-' + (p.side === "long" ? "up" : "down") + '">' +
+          esc(p.side) + '</span></td>' +
+        '<td class="num">' + esc(p.qty_fmt) + '</td>' +
         '<td class="num">' + money(p.avg_price, 4) + '</td>' +
         '<td class="num">' + money(p.last, 4) + '</td>' +
         '<td class="num">' + money(p.market_value) + '</td>' +
         '<td class="num ' + cls(p.unrealized_pnl) + '">' + signed(p.unrealized_pnl) + '</td>' +
         '<td class="num ' + cls(p.unrealized_pct) + '">' + signed(p.unrealized_pct, 2) + '%</td>' +
         '<td class="right"><button class="btn btn-sm btn-danger" data-close="' +
-        p.symbol + '">Close</button></td>' +
+        esc(p.symbol) + '" data-confirm="Close the entire ' + esc(p.symbol) +
+        ' position at the market?">Close</button></td>' +
         '</tr>';
     }).join("");
   }
@@ -543,16 +555,16 @@ JS = r"""
     body.innerHTML = rows.map(function (o) {
       const price = o.limit_price || o.stop_price;
       return '<tr>' +
-        '<td><strong>' + o.symbol + '</strong></td>' +
+        '<td><strong>' + esc(o.symbol) + '</strong></td>' +
         '<td><span class="badge badge-' + (o.side === "buy" ? "up" : "down") + '">' +
-          o.side + '</span></td>' +
-        '<td>' + o.order_type + '</td>' +
-        '<td class="num">' + o.qty_fmt + (o.filled_qty > 0 ? ' <span class="faint">(' +
-          o.filled_qty + ' done)</span>' : '') + '</td>' +
+          esc(o.side) + '</span></td>' +
+        '<td>' + esc(o.order_type) + '</td>' +
+        '<td class="num">' + esc(o.qty_fmt) + (o.filled_qty > 0 ? ' <span class="faint">(' +
+          esc(o.filled_qty) + ' done)</span>' : '') + '</td>' +
         '<td class="num">' + (price ? money(price, 4) : "mkt") + '</td>' +
-        '<td><span class="badge badge-neutral">' + o.status + '</span></td>' +
+        '<td><span class="badge badge-neutral">' + esc(o.status) + '</span></td>' +
         '<td class="right"><button class="btn btn-sm btn-danger" data-cancel="' +
-          o.id + '">Cancel</button></td>' +
+          esc(o.id) + '">Cancel</button></td>' +
         '</tr>';
     }).join("");
   }
@@ -562,7 +574,6 @@ JS = r"""
     const closeBtn = ev.target.closest("[data-close]");
     if (closeBtn) {
       const sym = closeBtn.dataset.close;
-      if (!confirm("Close the entire " + sym + " position at the market?")) return;
       closeBtn.disabled = true;
       try {
         await api("/api/positions/" + encodeURIComponent(sym) + "/close",
@@ -583,6 +594,29 @@ JS = r"""
       } catch (e) { toast(e.message, "error"); cancelBtn.disabled = false; }
       return;
     }
+  });
+
+  /* ------------------------------------------------- declarative bindings
+     The Content-Security-Policy forbids inline event handlers, so behaviour
+     that used to live in onclick/onchange/onsubmit attributes is bound here
+     instead. Those attributes were not merely unfashionable — the CSP made
+     them dead code, which is why the admin role dropdown never submitted. */
+  document.addEventListener("submit", function (ev) {
+    const form = ev.target.closest("form[data-confirm]");
+    if (form && !confirm(form.dataset.confirm)) ev.preventDefault();
+  });
+
+  document.addEventListener("click", function (ev) {
+    const btn = ev.target.closest("button[data-confirm]");
+    if (btn && !confirm(btn.dataset.confirm)) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+  });
+
+  document.addEventListener("change", function (ev) {
+    const el = ev.target.closest("[data-autosubmit]");
+    if (el && el.form) el.form.submit();
   });
 
   /* -------------------------------------------------------------- toasts */
