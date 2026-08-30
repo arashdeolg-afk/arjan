@@ -23,7 +23,7 @@ from .auth import (
 )
 from .backtest import Backtester
 from .clock import market_status
-from .db import audit_trail, connect, get_setting, set_setting, stats
+from .db import audit_trail, connect, db_path, get_setting, set_setting, stats
 from .feeds import build_feed
 from .instruments import catalog, resolve
 from .strategies import available as available_strategies, get as get_strategy
@@ -362,6 +362,71 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    """Consistent online backup of the database.
+
+    Uses SQLite's own backup API rather than copying the file. A `cp` of a
+    live database can capture a torn write and produce something that only
+    looks like a backup — which you discover at the worst possible moment.
+    """
+    import gzip
+    import shutil
+    import sqlite3 as sq
+    from pathlib import Path
+
+    source = db_path()
+    if not source.exists():
+        print(f"error: no database at {source}", file=sys.stderr)
+        return 1
+
+    dest_dir = Path(args.dest)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = dest_dir / f"deoltech-{stamp}.db"
+
+    src = sq.connect(f"file:{source}?mode=ro", uri=True)
+    dst = sq.connect(str(target))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+    # Verify before compressing. A backup nobody checked is a hypothesis.
+    check = sq.connect(str(target))
+    try:
+        ok = check.execute("PRAGMA integrity_check").fetchone()[0]
+        users = check.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        fills = check.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
+    finally:
+        check.close()
+    if ok != "ok":
+        print(f"error: integrity check failed on the backup: {ok}", file=sys.stderr)
+        return 1
+
+    if not args.no_compress:
+        with open(target, "rb") as f_in, gzip.open(f"{target}.gz", "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        target.unlink()
+        target = Path(f"{target}.gz")
+
+    size = target.stat().st_size
+    print(f"{target}  ({size / 1024:,.0f} KB, {users} users, {fills:,} fills, "
+          f"integrity ok)")
+
+    # Retention. A backup policy without one is a disk-full incident waiting.
+    if args.keep_days > 0:
+        cutoff = datetime.now(timezone.utc).timestamp() - args.keep_days * 86400
+        removed = 0
+        for old_file in dest_dir.glob("deoltech-*.db*"):
+            if old_file.stat().st_mtime < cutoff:
+                old_file.unlink()
+                removed += 1
+        if removed:
+            print(f"removed {removed} backup(s) older than {args.keep_days} days")
+    return 0
+
+
 def cmd_audit(args) -> int:
     conn = connect(args.db)
     entries = audit_trail(conn, args.limit, severity=args.severity)
@@ -464,6 +529,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("demo", help="seed a demo account with trades")
     p.add_argument("--username", default="demo")
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("backup", help="consistent online backup of the database")
+    p.add_argument("dest", nargs="?", default="backups",
+                   help="directory to write into (default: ./backups)")
+    p.add_argument("--keep-days", type=int, default=30,
+                   help="delete backups older than this (0 disables)")
+    p.add_argument("--no-compress", action="store_true")
+    p.set_defaults(func=cmd_backup)
 
     p = sub.add_parser("audit", help="print the audit log")
     p.add_argument("--limit", type=int, default=50)

@@ -28,7 +28,8 @@ create one in the browser instead.
 python3 -m deoltech quote AAPL BTCUSD EURUSD    # live prices
 python3 -m deoltech probe                       # is Finviz reachable?
 python3 -m deoltech backtest sma-crossover AAPL --param fast=10 --param slow=30
-python3 -m unittest discover -s tests           # 139 tests, no network
+python3 -m deoltech backup /var/backups         # consistent, verified, compressed
+python3 -m unittest discover -s tests           # 141 tests, no network
 ```
 
 ---
@@ -299,17 +300,26 @@ a way to trade as someone else.
 
 ## Deployment
 
-Everything needed is in [`deploy/`](../deploy).
+Everything needed is in [`deploy/`](../deploy). For a step-by-step launch on a
+fresh VPS — server hardening, DNS, TLS, backups, adding users — follow
+**[docs/LAUNCH.md](LAUNCH.md)**.
 
 ### Docker (recommended)
 
 ```bash
-cp deploy/.env.example .env
+cp deploy/.env.example deploy/.env
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # → DEOLTECH_SECRET
 
-docker compose -f deploy/docker-compose.yml up -d
+# Brings the stack up and obtains a Let's Encrypt certificate.
+DOMAIN=trade.example.com EMAIL=you@example.com ./deploy/init-tls.sh
+
 docker compose -f deploy/docker-compose.yml exec app python -m deoltech admin create
+docker compose -f deploy/docker-compose.yml exec app python -m deoltech probe
 ```
+
+That last command is the one worth running: it confirms Finviz is actually
+reachable from the server. A host that cannot reach it runs happily on
+simulated prices and looks completely normal.
 
 The app binds to `127.0.0.1` only; nginx terminates TLS and is the sole
 internet-facing service. The image runs as an unprivileged user with a read-only
@@ -331,12 +341,13 @@ log.
 ### Backups
 
 ```bash
-deploy/backup.sh /backups
+./deploy/backup.sh /var/backups/deoltech
 ```
 
-Uses SQLite's online `.backup` API, which is consistent while the app keeps
-serving. Copying a live database with `cp` can capture a torn write and produce
-a file that only looks like a backup.
+Uses SQLite's online backup API, verifies the result with an integrity check
+before compressing it, and applies 30-day retention. Copying a live database
+with `cp` can capture a torn write and produce a file that only looks like a
+backup.
 
 ### Configuration
 
@@ -413,7 +424,7 @@ src/deoltech/
     api.py          JSON API
     templates.py    HTML rendering
     assets.py       stylesheet and client script
-tests/              139 tests, no network, no real database
+tests/              141 tests, no network, no real database
 deploy/             Dockerfile, compose, nginx, systemd, backups
 ```
 

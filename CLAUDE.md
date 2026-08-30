@@ -120,5 +120,5 @@ python3 -m deoltech admin create        # first administrator
 python3 -m deoltech serve               # http://127.0.0.1:8000
 python3 -m deoltech probe               # is Finviz reachable and parsing?
 python3 -m deoltech demo                # seed a demo account from replayed history
-python3 -m unittest discover -s tests   # 139 tests
+python3 -m unittest discover -s tests   # 174 tests
 ```

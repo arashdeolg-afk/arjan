@@ -1,9 +1,12 @@
 # Deol Tech — single-host deployment.
 #
 #   cp deploy/.env.example .env    &&  edit it (DEOLTECH_SECRET is required)
-#   docker compose -f deploy/docker-compose.yml up -d
+#   DOMAIN=trade.example.com EMAIL=you@example.com ./deploy/init-tls.sh
 #   docker compose -f deploy/docker-compose.yml exec app \
 #       python -m deoltech admin create
+#
+# init-tls.sh brings the stack up and obtains the certificate. To start
+# without TLS (behind an existing proxy, say), `docker compose up -d app`.
 #
 # The app listens on 127.0.0.1 only. Anything reaching it from outside comes
 # through the TLS-terminating proxy, which is the only thing that should be
@@ -50,8 +53,39 @@ services:
       # nginx.conf `include`s this; without it the proxy fails to start.
       - ./deoltech_headers.conf:/etc/nginx/conf.d/deoltech_headers.conf:ro
       - ./certs:/etc/nginx/certs:ro
-      - certbot-webroot:/var/www/certbot:ro
+      - certbot-webroot:/var/www/certbot
+    # Reload every 12 hours to pick up a renewed certificate. Without this the
+    # proxy keeps serving the certificate it read at startup and quietly
+    # expires 90 days later, despite renewal having worked perfectly.
+    command: >
+      /bin/sh -c 'while :; do sleep 12h & wait $${!}; nginx -s reload; done &
+                  nginx -g "daemon off;"'
+
+  # Renews the certificate every 12 hours. certbot exits immediately when
+  # nothing is close to expiry, so this is nearly free; the copy-out step
+  # writes the renewed pair where nginx reads it, and nginx is reloaded on a
+  # matching schedule by the proxy container's own loop.
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+      - ./certs:/certs-out
+    entrypoint: /bin/sh
+    command: >
+      -c 'trap exit TERM;
+          while :; do
+            certbot renew --webroot -w /var/www/certbot --quiet || true;
+            for d in /etc/letsencrypt/live/*/; do
+              [ -e "$$d/fullchain.pem" ] || continue;
+              cp -L "$$d/fullchain.pem" /certs-out/fullchain.pem;
+              cp -L "$$d/privkey.pem"   /certs-out/privkey.pem;
+            done;
+            sleep 12h & wait $${!};
+          done'
 
 volumes:
   deoltech-data:
   certbot-webroot:
+  letsencrypt:

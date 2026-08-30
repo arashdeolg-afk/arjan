@@ -15,3 +15,5 @@ out/
 data/deoltech.db
 data/deoltech.db-wal
 data/deoltech.db-shm
+deploy/.env
+deploy/certs/

@@ -1,19 +1,26 @@
 #!/bin/sh
-# Back up the Deol Tech database safely.
+# Back up the Deol Tech database.
 #
-# Copying a live SQLite file with `cp` can capture a torn write. `.backup` uses
-# SQLite's own online backup API, which is consistent while the app keeps
-# serving — the difference between a backup and a file that looks like one.
+# Delegates to `deoltech backup`, which uses SQLite's online backup API,
+# verifies the result with an integrity check before compressing it, and
+# applies retention. Doing it in the application avoids depending on the
+# sqlite3 CLI, which is not present in the slim container image.
+#
+#   ./deploy/backup.sh /var/backups/deoltech
 set -eu
 
-DB="${DEOLTECH_DB:-/data/deoltech.db}"
-DEST="${1:-/backups}"
-STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-mkdir -p "$DEST"
+DEST="${1:-/var/backups/deoltech}"
+COMPOSE_FILE="$(dirname "$0")/docker-compose.yml"
 
-sqlite3 "$DB" ".backup '$DEST/deoltech-$STAMP.db'"
-gzip -f "$DEST/deoltech-$STAMP.db"
-echo "wrote $DEST/deoltech-$STAMP.db.gz"
-
-# Keep 30 days; a backup policy with no retention is a disk-full incident.
-find "$DEST" -name 'deoltech-*.db.gz' -mtime +30 -delete
+if [ -f "$COMPOSE_FILE" ] && command -v docker >/dev/null 2>&1 \
+   && docker compose -f "$COMPOSE_FILE" ps --status running app >/dev/null 2>&1; then
+  # Containerised: write inside the volume, then copy out to the host.
+  docker compose -f "$COMPOSE_FILE" exec -T app \
+      python -m deoltech backup /data/backups --keep-days "${KEEP_DAYS:-30}"
+  mkdir -p "$DEST"
+  docker compose -f "$COMPOSE_FILE" cp app:/data/backups/. "$DEST/"
+  echo "copied to $DEST"
+else
+  PYTHONPATH="${PYTHONPATH:-src}" python3 -m deoltech backup "$DEST" \
+      --keep-days "${KEEP_DAYS:-30}"
+fi

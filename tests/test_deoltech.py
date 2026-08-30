@@ -1218,6 +1218,57 @@ class TestAccountPersistence(unittest.TestCase):
         self.assertEqual(result, ["NVDA", "BTCUSD", "EURUSD"])
 
 
+class TestBackup(unittest.TestCase):
+    """A backup that has never been restored is a hypothesis, so test both."""
+
+    def test_backup_round_trips(self):
+        import gzip
+        import shutil
+        import sqlite3
+        from deoltech import accounts, auth, db
+        from deoltech.cli import main
+
+        path = os.path.join(_TMPDIR, f"backup-src-{id(self)}.db")
+        os.environ["DEOLTECH_DB"] = path
+        conn = db.connect(path)
+        user, _ = auth.bootstrap_admin(conn, "backupowner")
+        accounts.create_account(conn, user.id, "Main", starting_cash=25_000)
+
+        dest = os.path.join(_TMPDIR, f"backup-out-{id(self)}")
+        try:
+            self.assertEqual(main(["backup", dest]), 0)
+            archives = [f for f in os.listdir(dest) if f.endswith(".db.gz")]
+            self.assertEqual(len(archives), 1)
+
+            restored = os.path.join(dest, "restored.db")
+            with gzip.open(os.path.join(dest, archives[0]), "rb") as src, \
+                 open(restored, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            check = sqlite3.connect(restored)
+            try:
+                self.assertEqual(
+                    check.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                self.assertEqual(
+                    check.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
+                self.assertEqual(
+                    check.execute("SELECT username FROM users").fetchone()[0],
+                    "backupowner")
+                self.assertEqual(
+                    check.execute("SELECT COUNT(*) FROM accounts").fetchone()[0], 1)
+            finally:
+                check.close()
+        finally:
+            os.environ["DEOLTECH_DB"] = os.path.join(_TMPDIR, "test.db")
+
+    def test_backup_of_a_missing_database_fails_loudly(self):
+        from deoltech.cli import main
+        os.environ["DEOLTECH_DB"] = os.path.join(_TMPDIR, "definitely-not-here.db")
+        try:
+            self.assertEqual(main(["backup", os.path.join(_TMPDIR, "nope")]), 1)
+        finally:
+            os.environ["DEOLTECH_DB"] = os.path.join(_TMPDIR, "test.db")
+
+
 # ================================================================== the web
 
 
