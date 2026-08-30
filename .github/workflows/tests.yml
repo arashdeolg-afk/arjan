@@ -1,0 +1,70 @@
+# Both products in this repository are standard-library only, so there is
+# nothing to install and no lockfile to cache. That keeps this workflow fast
+# enough to run on every push without anyone learning to ignore it.
+
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes the run in flight for the same ref.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor the code targets; 3.12 catches deprecations early.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Confirm there are no third-party dependencies
+        run: |
+          # The stdlib-only constraint is load-bearing: it is why deployment is
+          # "copy the source and run it". Assert it rather than trusting it.
+          if ls requirements*.txt pyproject.toml setup.py Pipfile poetry.lock \
+               2>/dev/null | grep -q .; then
+            echo "::error::A dependency manifest appeared. Both products in this"
+            echo "::error::repository are standard-library only by design."
+            exit 1
+          fi
+          echo "No dependency manifest present, as expected."
+
+      - name: Byte-compile every module
+        run: python -m compileall -q src/
+
+      - name: Run the test suite
+        env:
+          PYTHONPATH: src
+          # Belt and braces: the suite redirects these itself, but if a test
+          # ever forgot to, this keeps it off any checked-out data file.
+          DEOLTECH_DB: ${{ runner.temp }}/ci-deoltech.db
+          REVOPS_DB: ${{ runner.temp }}/ci-revops.db
+        run: python -m unittest discover -s tests -v
+
+      - name: Confirm the tests make no network calls
+        env:
+          PYTHONPATH: src
+          DEOLTECH_DB: ${{ runner.temp }}/ci-offline-deoltech.db
+          REVOPS_DB: ${{ runner.temp }}/ci-offline-revops.db
+        run: |
+          # Re-runs the whole suite with DNS and outbound connections blocked.
+          # A test that starts depending on a live vendor fails here rather
+          # than becoming an intermittent mystery months later.
+          python tests/run_offline.py
