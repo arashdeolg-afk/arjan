@@ -20,7 +20,14 @@ from forge.store import Store          # noqa: E402
 
 
 def fake_ai_transport(url, headers, body):
-    """Pretend to be the Anthropic API: stream two deltas and stop."""
+    """Pretend to be a model API, speaking the dialect the URL implies."""
+    if "chat/completions" in url:
+        return [
+            b'data: {"choices":[{"delta":{"content":"compat says hi"},'
+            b'"finish_reason":null}]}\n',
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+            b"data: [DONE]\n",
+        ]
     events = [
         {"type": "content_block_delta", "index": 0,
          "delta": {"type": "text_delta", "text": "Hello from "}},
@@ -40,8 +47,12 @@ def fake_ai_transport(url, headers, body):
 class ServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The AI endpoints must see a clean environment, not a real key.
-        cls._saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)
+        # The AI endpoints must see a clean environment, not real keys.
+        cls._saved_env = {
+            var: os.environ.pop(var, None)
+            for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+                        "GEMINI_API_KEY")
+        }
         cls.tmp = tempfile.TemporaryDirectory()
         cls.store = Store(cls.tmp.name)
         cls.runner = Runner()
@@ -57,8 +68,9 @@ class ServerTest(unittest.TestCase):
         cls.httpd.server_close()
         cls.runner.stop_all()
         cls.tmp.cleanup()
-        if cls._saved_key is not None:
-            os.environ["ANTHROPIC_API_KEY"] = cls._saved_key
+        for var, value in cls._saved_env.items():
+            if value is not None:
+                os.environ[var] = value
 
     # ------------------------------------------------------------- helpers
 
@@ -452,6 +464,77 @@ class TestAiApi(ServerTest):
             self.assertNotIn("secretmiddle", body["key_masked"])
         finally:
             self.json_request("POST", "/api/settings", {"anthropic_api_key": ""})
+
+    def test_provider_settings_roundtrip(self):
+        status, body = self.json_request("POST", "/api/settings", {
+            "providers": {"openai": {"api_key": "sk-oa-secret-42",
+                                     "model": "gpt-4o-mini"}},
+            "ai": {"provider": "openai", "model": "gpt-4o-mini"},
+        })
+        try:
+            self.assertEqual(status, 200)
+            oa = body["providers"]["openai"]
+            self.assertTrue(oa["ready"])
+            self.assertNotIn("secret", oa["key_masked"] or "")
+            self.assertEqual(oa["default_model"], "gpt-4o-mini")
+            self.assertEqual(body["ai"],
+                             {"provider": "openai", "model": "gpt-4o-mini"})
+            # Removing the key empties the provider again.
+            _, body2 = self.json_request("POST", "/api/settings", {
+                "providers": {"openai": {"api_key": ""}}})
+            self.assertFalse(body2["providers"]["openai"]["ready"])
+        finally:
+            self.json_request("POST", "/api/settings", {
+                "providers": {"openai": {"api_key": "", "model": ""}},
+                "ai": {"provider": "anthropic", "model": ""},
+            })
+
+    def test_provider_settings_validation(self):
+        status, _ = self.json_request("POST", "/api/settings", {
+            "providers": {"nonsense": {"api_key": "x"}}})
+        self.assertEqual(status, 400)
+        status, _ = self.json_request("POST", "/api/settings", {
+            "providers": {"compat": {"base_url": "ftp://nope"}}})
+        self.assertEqual(status, 400)
+
+    def test_chat_on_compat_provider_via_base_url(self):
+        self.json_request("POST", "/api/settings", {
+            "providers": {"compat": {"base_url": "http://127.0.0.1:1/v1",
+                                     "model": "llama3"}}})
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            try:
+                conn.request(
+                    "POST", "/api/ai/chat",
+                    body=json.dumps({
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "provider": "compat",
+                    }),
+                    headers={"Content-Type": "application/json",
+                             "X-Forge-Client": "1"})
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                raw = resp.read().decode()
+            finally:
+                conn.close()
+            payloads = [json.loads(line[5:]) for line in raw.splitlines()
+                        if line.startswith("data:")]
+            text = "".join(p.get("text", "") for p in payloads
+                           if p.get("type") == "text")
+            self.assertEqual(text, "compat says hi")
+            self.assertEqual(payloads[-1]["type"], "done")
+        finally:
+            self.json_request("POST", "/api/settings", {
+                "providers": {"compat": {"base_url": "", "model": ""}}})
+
+    def test_chat_unready_provider_says_no_key(self):
+        status, body = self.json_request(
+            "POST", "/api/ai/chat",
+            {"messages": [{"role": "user", "content": "hi"}],
+             "provider": "gemini"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["code"], "no_key")
+        self.assertIn("Gemini", body["error"])
 
 
 if __name__ == "__main__":

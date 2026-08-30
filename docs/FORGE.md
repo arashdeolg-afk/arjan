@@ -43,25 +43,35 @@ shows a waiting page that retries by itself. One rule for proxied apps:
 use **relative** URLs (`api/hello`, not `/api/hello`) in pages, since
 the app is mounted under `/proxy/<id>/`.
 
-## The AI pane (Claude)
+## The AI pane (bring your own keys)
 
-The assistant is off until a key exists. Two ways to provide one:
+The assistant is off until at least one provider has credentials — add
+them whenever you're ready, in **Settings → AI models** or via
+environment variables. Four providers are wired in:
 
-1. `export ANTHROPIC_API_KEY=sk-ant-…` before starting forge, or
-2. paste it into **Settings → Claude** in the app; it is saved to
-   `data/forge/settings.json` (gitignored, chmod 600) and never leaves
-   your machine except in requests to `api.anthropic.com`.
+| Provider | Key | Models |
+|---|---|---|
+| **Claude (Anthropic)** — default | `ANTHROPIC_API_KEY` or Settings | Curated picker: Opus 5 (default), Sonnet 5, Haiku 4.5 |
+| **OpenAI** | `OPENAI_API_KEY` or Settings | Free-text model id (e.g. `gpt-4o`) |
+| **Google Gemini** | `GEMINI_API_KEY` or Settings | Free-text model id (e.g. `gemini-2.0-flash`) |
+| **OpenAI-compatible** | Base URL (+ optional key) | Ollama, OpenRouter, Groq… free-text model id |
 
-With **can edit files** on, Claude answers in *build mode*: every file it
-creates or changes arrives as a complete `file:` block with an **Apply**
-button (or **Apply all**), which writes it into the project and refreshes
-the preview. Model picker offers Claude Opus 5 (default), Sonnet 5 and
-Haiku 4.5. Requests stream token-by-token; on Opus the server-side
+Non-Anthropic model ids are free text on purpose: when a provider ships
+a new model, you type its id — no forge release needed. Keys are saved
+to `data/forge/settings.json` (gitignored, chmod 600) and leave the
+machine only in requests to the provider you selected. Environment
+variables always override saved keys.
+
+With **can edit files** on, the model answers in *build mode*: every
+file it creates or changes arrives as a complete `file:` block with an
+**Apply** button (or **Apply all**), which writes it into the project
+and refreshes the preview. Everything streams token-by-token, with a
+stop button mid-generation; on Claude Opus the server-side
 refusal-fallback option is enabled so a safety refusal degrades
 gracefully instead of returning an empty turn.
 
-The integration is raw HTTPS via `urllib` (stdlib-only repo — the
-official SDK would be a dependency).
+All integrations are raw HTTPS via `urllib` (stdlib-only repo — vendor
+SDKs would be dependencies).
 
 ## How it's put together
 

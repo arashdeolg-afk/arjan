@@ -137,6 +137,148 @@ class TestStream(unittest.TestCase):
         self.assertIn("declined", out[-1]["message"])
 
 
+class TestProviders(unittest.TestCase):
+    """The multi-provider layer: keys land later, everything is ready now."""
+
+    def setUp(self):
+        import os
+        self._saved = {}
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+            self._saved[var] = os.environ.pop(var, None)
+
+    def tearDown(self):
+        import os
+        for var, value in self._saved.items():
+            if value is not None:
+                os.environ[var] = value
+
+    def test_key_resolution_per_provider(self):
+        import os
+        settings = {"providers": {"openai": {"api_key": "sk-saved"}}}
+        self.assertEqual(ai.resolve_provider_key(settings, "openai"),
+                         ("sk-saved", "settings"))
+        os.environ["OPENAI_API_KEY"] = "sk-env"
+        try:
+            self.assertEqual(ai.resolve_provider_key(settings, "openai"),
+                             ("sk-env", "env"))
+        finally:
+            del os.environ["OPENAI_API_KEY"]
+        self.assertEqual(ai.resolve_provider_key({}, "gemini"), (None, "none"))
+
+    def test_legacy_anthropic_key_still_counts(self):
+        settings = {"anthropic_api_key": "sk-old"}
+        self.assertEqual(ai.resolve_provider_key(settings, "anthropic"),
+                         ("sk-old", "settings"))
+        self.assertTrue(ai.provider_ready(settings, "anthropic"))
+
+    def test_compat_is_ready_with_base_url_and_no_key(self):
+        self.assertFalse(ai.provider_ready({}, "compat"))
+        settings = {"providers": {"compat":
+                    {"base_url": "http://127.0.0.1:11434/v1"}}}
+        self.assertTrue(ai.provider_ready(settings, "compat"))
+
+    def test_default_selection_and_models(self):
+        self.assertEqual(ai.default_selection({}),
+                         ("anthropic", ai.DEFAULT_MODEL))
+        settings = {"ai": {"provider": "gemini"},
+                    "providers": {"gemini": {"model": "gemini-x"}}}
+        self.assertEqual(ai.default_selection(settings), ("gemini", "gemini-x"))
+        # Legacy top-level model still steers anthropic.
+        self.assertEqual(ai.default_model_for({"model": "claude-sonnet-5"},
+                                              "anthropic"), "claude-sonnet-5")
+
+    def test_prepare_openai_request(self):
+        settings = {"providers": {"openai": {"api_key": "sk-oa"}}}
+        url, headers, payload = ai.prepare_request(
+            "openai", "gpt-4o", "sys prompt",
+            [{"role": "user", "content": "hi"}], settings)
+        self.assertEqual(url, "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(headers["authorization"], "Bearer sk-oa")
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["messages"][0],
+                         {"role": "system", "content": "sys prompt"})
+        self.assertEqual(payload["messages"][1]["content"], "hi")
+
+    def test_prepare_compat_needs_base_url(self):
+        with self.assertRaises(ai.AIError):
+            ai.prepare_request("compat", "llama3", "s",
+                               [{"role": "user", "content": "hi"}], {})
+        settings = {"providers": {"compat":
+                    {"base_url": "http://127.0.0.1:11434/v1/"}}}
+        url, headers, _payload = ai.prepare_request(
+            "compat", "llama3", "s", [{"role": "user", "content": "hi"}],
+            settings)
+        self.assertEqual(url, "http://127.0.0.1:11434/v1/chat/completions")
+        self.assertNotIn("authorization", headers)  # keyless local server
+
+    def test_prepare_gemini_request(self):
+        settings = {"providers": {"gemini": {"api_key": "g-key"}}}
+        url, headers, payload = ai.prepare_request(
+            "gemini", "gemini-2.0-flash", "sys",
+            [{"role": "user", "content": "q"},
+             {"role": "assistant", "content": "a"}], settings)
+        self.assertIn("gemini-2.0-flash:streamGenerateContent", url)
+        self.assertEqual(headers["x-goog-api-key"], "g-key")
+        self.assertEqual(payload["contents"][0]["role"], "user")
+        self.assertEqual(payload["contents"][1]["role"], "model")
+        self.assertEqual(payload["systemInstruction"]["parts"][0]["text"], "sys")
+
+    def test_chat_streams_openai_shape(self):
+        chunks = [
+            b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":null}]}\n',
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+            b"data: [DONE]\n",
+        ]
+        captured = {}
+
+        def transport(url, headers, body):
+            captured.update(url=url, body=json.loads(body))
+            return chunks
+
+        settings = {"providers": {"openai": {"api_key": "sk"}}}
+        out = list(ai.chat("openai", "gpt-4o", "s",
+                           [{"role": "user", "content": "hi"}],
+                           settings, transport))
+        text = "".join(e["text"] for e in out if e["type"] == "text")
+        self.assertEqual(text, "Hello")
+        self.assertEqual(out[-1], {"type": "done", "stop_reason": "stop",
+                                   "usage": {}})
+        self.assertEqual(captured["body"]["model"], "gpt-4o")
+
+    def test_chat_streams_gemini_shape(self):
+        chunks = [
+            b'data: {"candidates":[{"content":{"parts":[{"text":"Hi "}]}}]}\n',
+            b'data: {"candidates":[{"content":{"parts":[{"text":"there"}]},'
+            b'"finishReason":"STOP"}]}\n',
+        ]
+        settings = {"providers": {"gemini": {"api_key": "g"}}}
+        out = list(ai.chat("gemini", "gemini-2.0-flash", "s",
+                           [{"role": "user", "content": "hi"}],
+                           settings, lambda *a: chunks))
+        text = "".join(e["text"] for e in out if e["type"] == "text")
+        self.assertEqual(text, "Hi there")
+        self.assertEqual(out[-1]["stop_reason"], "STOP")
+
+    def test_openai_error_object_surfaces(self):
+        chunks = [b'data: {"error":{"message":"invalid model"}}\n']
+        settings = {"providers": {"openai": {"api_key": "sk"}}}
+        out = list(ai.chat("openai", "nope", "s",
+                           [{"role": "user", "content": "hi"}],
+                           settings, lambda *a: chunks))
+        self.assertEqual(out[-1]["type"], "error")
+        self.assertIn("invalid model", out[-1]["message"])
+
+    def test_provider_status_masks_keys(self):
+        settings = {"providers": {"openai": {"api_key": "sk-oa-secret123456"}}}
+        status = ai.provider_status(settings)
+        self.assertTrue(status["openai"]["ready"])
+        self.assertNotIn("secret1234", status["openai"]["key_masked"])
+        self.assertFalse(status["gemini"]["ready"])
+        self.assertIn("models", status["anthropic"])
+
+
 class TestFileBlocks(unittest.TestCase):
     def test_single_block(self):
         text = ("Here you go.\n\n```file:index.html\n<h1>Hi</h1>\n```\n\nDone.")

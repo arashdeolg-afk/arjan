@@ -189,6 +189,7 @@
       this.ta = this.el.querySelector(".fe-ta");
       this._lineCount = 0;
       this._raf = 0;
+      this._buildFind();
 
       this.ta.addEventListener("input", () => {
         this._schedule();
@@ -321,6 +322,21 @@
         this._toggleComment();
         return;
       }
+      if (mod && e.key.toLowerCase() === "f" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        this.openFind();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        this.findNext(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === "Escape" && !this._find.hidden) {
+        e.preventDefault();
+        this.closeFind();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         if (s !== e2 && v.slice(s, e2).includes("\n")) {
@@ -393,6 +409,159 @@
           return;
         }
       }
+    }
+
+    /* --------------------------------------------------- find & replace */
+
+    _buildFind() {
+      const bar = document.createElement("div");
+      bar.className = "fe-find";
+      bar.hidden = true;
+      bar.innerHTML =
+        '<input class="ff-q" placeholder="Find" spellcheck="false">' +
+        '<span class="ff-count"></span>' +
+        '<button class="ff-btn ff-prev" title="Previous (Shift+Enter)">‹</button>' +
+        '<button class="ff-btn ff-next" title="Next (Enter)">›</button>' +
+        '<input class="ff-r" placeholder="Replace with" spellcheck="false">' +
+        '<button class="ff-btn wide ff-rep" title="Replace">Replace</button>' +
+        '<button class="ff-btn wide ff-all" title="Replace all">All</button>' +
+        '<button class="ff-btn ff-x" title="Close (Esc)">×</button>';
+      this.el.appendChild(bar);
+      this._find = bar;
+      this._fq = bar.querySelector(".ff-q");
+      this._fr = bar.querySelector(".ff-r");
+      this._fcount = bar.querySelector(".ff-count");
+      this._fq.addEventListener("input", () => this._updateFindCount());
+      this._fq.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); this.findNext(e.shiftKey ? -1 : 1); }
+      });
+      this._fr.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); this.replaceOne(); }
+      });
+      bar.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.stopPropagation(); this.closeFind(); }
+      });
+      bar.querySelector(".ff-prev").addEventListener("click", () => this.findNext(-1));
+      bar.querySelector(".ff-next").addEventListener("click", () => this.findNext(1));
+      bar.querySelector(".ff-rep").addEventListener("click", () => this.replaceOne());
+      bar.querySelector(".ff-all").addEventListener("click", () => this.replaceAll());
+      bar.querySelector(".ff-x").addEventListener("click", () => this.closeFind());
+    }
+
+    openFind() {
+      const { selectionStart: s, selectionEnd: e } = this.ta;
+      const sel = this.ta.value.slice(s, e);
+      if (sel && !sel.includes("\n")) this._fq.value = sel;
+      this._find.hidden = false;
+      this._updateFindCount();
+      this._fq.focus();
+      this._fq.select();
+    }
+
+    closeFind() {
+      this._find.hidden = true;
+      this.ta.focus();
+    }
+
+    _matches() {
+      const q = this._fq.value;
+      if (!q) return [];
+      const hay = this.ta.value.toLowerCase();
+      const needle = q.toLowerCase();
+      const out = [];
+      let i = hay.indexOf(needle);
+      while (i !== -1 && out.length < 10000) {
+        out.push(i);
+        i = hay.indexOf(needle, i + Math.max(needle.length, 1));
+      }
+      return out;
+    }
+
+    _updateFindCount(current = -1) {
+      const matches = this._matches();
+      if (!this._fq.value) { this._fcount.textContent = ""; return; }
+      if (current === -1) {
+        current = matches.filter((m) => m < this.ta.selectionStart).length;
+        if (!matches.includes(this.ta.selectionStart)) current = Math.min(current, matches.length);
+        else current += 1;
+      }
+      this._fcount.textContent = matches.length
+        ? `${Math.max(current, 1)}/${matches.length}` : "0/0";
+    }
+
+    findNext(dir = 1) {
+      const matches = this._matches();
+      const q = this._fq.value;
+      if (!matches.length) { this._updateFindCount(); return; }
+      let idx;
+      if (dir > 0) {
+        const from = this.ta.selectionEnd;
+        idx = matches.findIndex((m) => m >= from);
+        if (idx === -1) idx = 0;  // wrap
+      } else {
+        const from = this.ta.selectionStart;
+        idx = matches.length - 1;
+        for (let i = matches.length - 1; i >= 0; i--) {
+          if (matches[i] < from) { idx = i; break; }
+          if (i === 0) idx = matches.length - 1;  // wrap
+        }
+      }
+      const pos = matches[idx];
+      this.ta.setSelectionRange(pos, pos + q.length);
+      this._reveal(pos);
+      this._cursorMoved();
+      this._updateFindCount(idx + 1);
+    }
+
+    _charWidth() {
+      if (!this._chW) {
+        const ctx = document.createElement("canvas").getContext("2d");
+        ctx.font = getComputedStyle(this.ta).font;
+        this._chW = ctx.measureText("0".repeat(20)).width / 20 || 8;
+      }
+      return this._chW;
+    }
+
+    _reveal(pos) {
+      const before = this.ta.value.slice(0, pos);
+      const line = (before.match(/\n/g) || []).length;
+      const col = pos - (before.lastIndexOf("\n") + 1);
+      const view = this.ta.clientHeight;
+      const target = line * LINE_H - view / 2;
+      this.ta.scrollTop = Math.max(0, target);
+      const x = (col - 8) * this._charWidth();
+      this.ta.scrollLeft = Math.max(0, x > this.ta.clientWidth * 0.6 ? x : 0);
+      this._syncScroll();
+    }
+
+    replaceOne() {
+      const q = this._fq.value;
+      if (!q) return;
+      const { selectionStart: s, selectionEnd: e } = this.ta;
+      const selected = this.ta.value.slice(s, e);
+      if (selected.toLowerCase() === q.toLowerCase()) {
+        this.ta.focus();
+        this.ta.setSelectionRange(s, e);
+        this._insert(this._fr.value);
+        this._fq.focus();
+      }
+      this.findNext(1);
+    }
+
+    replaceAll() {
+      const q = this._fq.value;
+      const matches = this._matches();
+      if (!q || !matches.length) return;
+      const safe = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const replacement = this._fr.value;
+      const next = this.ta.value.replace(new RegExp(safe, "gi"), () => replacement);
+      this.ta.focus();
+      this.ta.setSelectionRange(0, this.ta.value.length);
+      this._insert(next);
+      this.ta.setSelectionRange(0, 0);
+      this._syncScroll();
+      this._fcount.textContent = `${matches.length} replaced`;
+      this._fq.focus();
     }
 
     _toggleComment() {

@@ -451,52 +451,124 @@ function newProjectModal(templates, preselect) {
 }
 
 async function settingsModal() {
-  const settings = await api("GET", "/api/settings");
-  const sys = state.system || await api("GET", "/api/system");
+  const sys = await api("GET", "/api/system");
+  state.system = sys;
+  const P = sys.providers;
+  const sel = { ...(sys.ai || { provider: "anthropic", model: sys.default_model }) };
+
+  const provCard = (pid, controls) => {
+    const p = P[pid];
+    const chip = p.ready
+      ? `<span class="prov-chip ok">${p.source === "env" ? "env key" : "ready"}</span>`
+      : `<span class="prov-chip">${pid === "compat" ? "no base URL" : "no key"}</span>`;
+    return `
+      <div class="prov" data-pid="${pid}">
+        <div class="prov-head">
+          <b>${esc(p.label)}</b>${chip}
+          ${p.key_masked ? `<span class="hint-inline">${esc(p.key_masked)}</span>` : ""}
+          <span class="spacer"></span>
+          ${p.source === "settings" ? '<button class="btn ghost sm prov-rm">remove key</button>' : ""}
+        </div>
+        ${controls}
+      </div>`;
+  };
+
   modal({
     title: "Settings",
+    wide: true,
     body: (bodyEl) => {
-      const envNote = settings.ai_source === "env"
-        ? `<p class="hint">Using the key from the <code>ANTHROPIC_API_KEY</code> environment
-             variable (${esc(settings.key_masked || "")}). It overrides anything saved here.</p>`
-        : "";
       bodyEl.innerHTML = `
-        <h3 class="modal-h">${I.sparkle} Claude</h3>
-        <p class="hint">The AI pane uses the Anthropic API with your own key.
-          Get one at <a href="https://console.anthropic.com/" target="_blank"
-          rel="noopener">console.anthropic.com</a> — it's stored only in
-          <code>data/forge/settings.json</code> on this machine.</p>
-        ${envNote}
-        <label class="label">API key ${settings.ai_source === "settings"
-          ? `<span class="hint-inline">saved: ${esc(settings.key_masked)}</span>` : ""}</label>
+        <h3 class="modal-h">${I.sparkle} AI models</h3>
+        <p class="hint">Bring your own keys — saved only to
+          <code>data/forge/settings.json</code> on this machine (never committed).
+          Environment variables (<code>ANTHROPIC_API_KEY</code>,
+          <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code>) override saved keys.</p>
+        <label class="label">Default chat model</label>
         <div class="row">
-          <input class="input" id="set-key" type="password"
-                 placeholder="sk-ant-…" spellcheck="false" autocomplete="off">
-          ${settings.ai_source === "settings"
-            ? '<button class="btn ghost" id="set-key-rm">Remove</button>' : ""}
+          <select class="select" id="set-prov" style="max-width: 46%">
+            ${Object.entries(P).map(([pid, p]) =>
+              `<option value="${pid}"${pid === sel.provider ? " selected" : ""}>${esc(p.label)}</option>`).join("")}
+          </select>
+          <span id="set-model-slot" style="flex:1"></span>
         </div>
-        <label class="label">Model</label>
-        <select class="select" id="set-model">
-          ${sys.models.map((m) =>
-            `<option value="${esc(m.id)}"${m.id === settings.model ? " selected" : ""}>
-               ${esc(m.label)} — ${esc(m.blurb)}</option>`).join("")}
-        </select>`;
-      $("#set-key-rm", bodyEl)?.addEventListener("click", async () => {
-        await api("POST", "/api/settings", { anthropic_api_key: "" });
+        ${provCard("anthropic", `
+          <input class="input prov-key" type="password" placeholder="sk-ant-…"
+                 autocomplete="off" spellcheck="false">`)}
+        ${provCard("openai", `
+          <div class="row">
+            <input class="input prov-key" type="password" placeholder="sk-…"
+                   autocomplete="off" spellcheck="false">
+            <input class="input mono prov-model" placeholder="model · e.g. gpt-4o"
+                   value="${esc(P.openai.default_model)}" spellcheck="false"
+                   style="max-width: 44%">
+          </div>`)}
+        ${provCard("gemini", `
+          <div class="row">
+            <input class="input prov-key" type="password" placeholder="AIza…"
+                   autocomplete="off" spellcheck="false">
+            <input class="input mono prov-model" placeholder="model · e.g. gemini-2.0-flash"
+                   value="${esc(P.gemini.default_model)}" spellcheck="false"
+                   style="max-width: 44%">
+          </div>`)}
+        ${provCard("compat", `
+          <input class="input mono prov-url"
+                 placeholder="base URL · e.g. http://127.0.0.1:11434/v1"
+                 value="${esc(P.compat.base_url || "")}" spellcheck="false">
+          <div class="row" style="margin-top: 8px">
+            <input class="input prov-key" type="password"
+                   placeholder="API key (optional)" autocomplete="off" spellcheck="false">
+            <input class="input mono prov-model" placeholder="model · e.g. llama3"
+                   value="${esc(P.compat.default_model)}" spellcheck="false"
+                   style="max-width: 44%">
+          </div>
+          <p class="hint">Ollama, OpenRouter, Groq — anything speaking the OpenAI chat API.</p>`)}`;
+
+      const modelSlot = $("#set-model-slot", bodyEl);
+      const renderModelPick = () => {
+        const pid = $("#set-prov", bodyEl).value;
+        if (pid === "anthropic") {
+          const current = sel.provider === "anthropic" ? sel.model : P.anthropic.default_model;
+          modelSlot.innerHTML = `<select class="select" id="set-model">
+            ${P.anthropic.models.map((m) =>
+              `<option value="${esc(m.id)}"${m.id === current ? " selected" : ""}>${esc(m.label)} — ${esc(m.blurb)}</option>`).join("")}
+          </select>`;
+        } else {
+          modelSlot.innerHTML =
+            `<span class="hint">uses the model on the ${esc(P[pid].label)} card below</span>`;
+        }
+      };
+      renderModelPick();
+      $("#set-prov", bodyEl).addEventListener("change", renderModelPick);
+      $$(".prov-rm", bodyEl).forEach((btn) => btn.addEventListener("click", async (e) => {
+        const pid = e.target.closest(".prov").dataset.pid;
+        await api("POST", "/api/settings", { providers: { [pid]: { api_key: "" } } });
         toast("Key removed", "ok");
-        refreshSystem();
-      });
+        await refreshSystem();
+      }));
     },
     actions: [
       { label: "Cancel", kind: "ghost", fn: (close) => close() },
       {
         label: "Save", kind: "primary",
         fn: async (close, box) => {
-          const patch = { model: $("#set-model", box).value };
-          const key = $("#set-key", box).value.trim();
-          if (key) patch.anthropic_api_key = key;
+          const providers = {};
+          $$(".prov", box).forEach((card) => {
+            const pid = card.dataset.pid;
+            const conf = {};
+            const key = $(".prov-key", card)?.value.trim();
+            if (key) conf.api_key = key;
+            const modelInput = $(".prov-model", card);
+            if (modelInput) conf.model = modelInput.value.trim();
+            const urlInput = $(".prov-url", card);
+            if (urlInput) conf.base_url = urlInput.value.trim();
+            if (Object.keys(conf).length) providers[pid] = conf;
+          });
+          const provider = $("#set-prov", box).value;
+          const model = provider === "anthropic"
+            ? $("#set-model", box).value
+            : ($(`.prov[data-pid="${provider}"] .prov-model`, box)?.value.trim() || "");
           try {
-            await api("POST", "/api/settings", patch);
+            await api("POST", "/api/settings", { providers, ai: { provider, model } });
             toast("Settings saved", "ok");
             close();
             await refreshSystem();
@@ -527,8 +599,9 @@ async function renderWorkspace(pid) {
     es: null, running: false,
     right: meta.kind === "web" ? "preview" : "ai",
     ai: {
-      msgs: [], busy: false, build: true, includeFile: true,
-      model: state.system.default_model,
+      msgs: [], busy: false, build: true, includeFile: true, ctrl: null,
+      provider: state.system.ai?.provider || "anthropic",
+      model: state.system.ai?.model || state.system.default_model,
     },
     cleanups: [],
     cleanup() { this.cleanups.forEach((fn) => { try { fn(); } catch {} }); },
@@ -1004,14 +1077,37 @@ async function renderWorkspace(pid) {
     catch { previewFrame.src = previewFrame.src; }
   }, 250);
 
+  function aiOptions() {
+    const P = state.system.providers || {};
+    const opts = [];
+    for (const [pid, p] of Object.entries(P)) {
+      if (pid === "anthropic") {
+        for (const m of p.models || []) {
+          opts.push({ v: `anthropic::${m.id}`, t: m.label, ready: p.ready });
+        }
+      } else if (p.default_model) {
+        const name = p.label.replace(" (Anthropic)", "").replace("Google ", "");
+        opts.push({ v: `${pid}::${p.default_model}`,
+                    t: `${name} · ${p.default_model}`, ready: p.ready });
+      }
+    }
+    return opts;
+  }
+
   function renderAi() {
     rightTools.innerHTML = "";
     previewFrame = null;
+    const opts = aiOptions();
+    const current = `${ws.ai.provider}::${ws.ai.model}`;
     const modelSel = el("select", { class: "select sm", title: "Model" },
-      state.system.models.map((m) =>
-        `<option value="${esc(m.id)}"${m.id === ws.ai.model ? " selected" : ""}>${esc(m.label)}</option>`
+      opts.map((o) =>
+        `<option value="${esc(o.v)}"${o.v === current ? " selected" : ""}` +
+        `${o.ready ? "" : " disabled"}>${esc(o.t)}${o.ready ? "" : " — add key"}</option>`
       ).join(""));
-    modelSel.addEventListener("change", () => { ws.ai.model = modelSel.value; });
+    modelSel.addEventListener("change", () => {
+      [ws.ai.provider, ws.ai.model] = modelSel.value.split("::");
+      updateAiNote();
+    });
     rightTools.appendChild(modelSel);
 
     rightBody.innerHTML = `
@@ -1042,7 +1138,10 @@ async function renderWorkspace(pid) {
       input.style.height = "auto";
       input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
     });
-    $("#ai-send").addEventListener("click", sendAi);
+    $("#ai-send").addEventListener("click", () => {
+      if (ws.ai.busy) ws.ai.ctrl?.abort();
+      else sendAi();
+    });
     $("#ai-msgs").addEventListener("click", (e) => {
       const btn = e.target.closest(".apply-btn");
       if (!btn) return;
@@ -1060,14 +1159,21 @@ async function renderWorkspace(pid) {
   function updateAiNote() {
     const note = $("#ai-note");
     if (!note) return;
-    if (state.system.ai_ready) { note.hidden = true; return; }
+    const P = state.system.providers || {};
+    const current = P[ws.ai.provider];
+    if (current?.ready) { note.hidden = true; return; }
     note.hidden = false;
+    const what = ws.ai.provider === "compat" ? "a base URL" : "an API key";
     note.innerHTML = `${I.sparkle}
-      <span>Add your Anthropic API key to wake the assistant.</span>
-      <button class="btn sm primary" id="ai-addkey">Add key</button>`;
+      <span>Add ${what} for ${esc(current?.label || ws.ai.provider)} —
+        Claude, OpenAI, Gemini and local models all work.</span>
+      <button class="btn sm primary" id="ai-addkey">Open settings</button>`;
     $("#ai-addkey").addEventListener("click", () => settingsModal());
   }
-  ws.onSystem = () => updateAiNote();
+  ws.onSystem = () => {
+    if (ws.right === "ai") renderAi();
+    else updateAiNote();
+  };
 
   function renderAiMsgs(streaming = false) {
     const box = $("#ai-msgs");
@@ -1100,9 +1206,17 @@ async function renderWorkspace(pid) {
     const input = $("#ai-input");
     const text = input.value.trim();
     if (!text || ws.ai.busy) return;
-    if (!state.system.ai_ready) { updateAiNote(); toast("Add your API key first", "err"); return; }
+    const P = state.system.providers || {};
+    if (!P[ws.ai.provider]?.ready) {
+      updateAiNote();
+      toast("Add an API key for this model first", "err");
+      return;
+    }
     input.value = ""; input.style.height = "auto";
     ws.ai.busy = true;
+    ws.ai.ctrl = new AbortController();
+    const sendBtn = $("#ai-send");
+    if (sendBtn) { sendBtn.innerHTML = I.stop; sendBtn.title = "Stop"; }
     ws.ai.msgs.push({ role: "user", content: text });
     const reply = { role: "assistant", content: "", streaming: true };
     ws.ai.msgs.push(reply);
@@ -1125,10 +1239,12 @@ async function renderWorkspace(pid) {
       const resp = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Forge-Client": "1" },
+        signal: ws.ai.ctrl.signal,
         body: JSON.stringify({
           messages: history,
           project_id: pid,
           mode: ws.ai.build ? "build" : "chat",
+          provider: ws.ai.provider,
           model: ws.ai.model,
           include_paths: ws.ai.includeFile && ws.active && !ws.active.binary
             ? [ws.active.path] : [],
@@ -1160,11 +1276,15 @@ async function renderWorkspace(pid) {
         }
       }
     } catch (e) {
-      reply.content += `\n\n**⚠ ${e.message}**`;
-      if (e.code === "no_key") { state.system.ai_ready = false; updateAiNote(); }
+      if (e.name === "AbortError") reply.content += "\n\n*(stopped)*";
+      else reply.content += `\n\n**⚠ ${e.message}**`;
+      if (e.code === "no_key") updateAiNote();
     } finally {
       reply.streaming = false;
       ws.ai.busy = false;
+      ws.ai.ctrl = null;
+      const btn = $("#ai-send");
+      if (btn) { btn.innerHTML = I.send; btn.title = "Send"; }
       renderAiMsgs(true);
     }
   }
@@ -1307,6 +1427,22 @@ async function renderWorkspace(pid) {
   $("#w-file-input").addEventListener("change", (e) => {
     if (e.target.files.length) uploadFiles([...e.target.files]);
     e.target.value = "";
+  });
+  const sideEl = $("#w-side");
+  ["dragenter", "dragover"].forEach((type) => sideEl.addEventListener(type, (e) => {
+    if ([...(e.dataTransfer?.types || [])].includes("Files")) {
+      e.preventDefault();
+      sideEl.classList.add("drop");
+    }
+  }));
+  sideEl.addEventListener("dragleave", (e) => {
+    if (!sideEl.contains(e.relatedTarget)) sideEl.classList.remove("drop");
+  });
+  sideEl.addEventListener("drop", (e) => {
+    e.preventDefault();
+    sideEl.classList.remove("drop");
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) uploadFiles(files);
   });
   $("#c-clear").addEventListener("click", () => { cBody.innerHTML = ""; cLast = null; });
   $("#c-input").addEventListener("keydown", async (e) => {

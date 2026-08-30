@@ -390,31 +390,41 @@ class ForgeHandler(BaseHTTPRequestHandler):
         import shutil as _shutil
         from . import __version__
         settings = self.store.get_settings()
-        key, source = ai.resolve_key(settings)
+        providers = ai.provider_status(settings)
+        sel_provider, sel_model = ai.default_selection(settings)
         self._json({
             "version": __version__,
             "python": sys.version.split()[0],
             "node": _shutil.which("node") is not None,
             "models": ai.MODELS,
-            "default_model": settings.get("model") or ai.DEFAULT_MODEL,
-            "ai_ready": key is not None,
-            "ai_source": source,
+            "default_model": sel_model,
+            "providers": providers,
+            "ai": {"provider": sel_provider, "model": sel_model},
+            "ai_ready": any(p["ready"] for p in providers.values()),
+            "ai_source": providers["anthropic"]["source"],
         })
 
     def h_settings_get(self, match, query):
         settings = self.store.get_settings()
-        key, source = ai.resolve_key(settings)
+        providers = ai.provider_status(settings)
+        sel_provider, sel_model = ai.default_selection(settings)
+        anthropic = providers["anthropic"]
         self._json({
-            "model": settings.get("model") or ai.DEFAULT_MODEL,
-            "ai_ready": key is not None,
-            "ai_source": source,
-            "key_masked": ai.mask_key(key) if key else None,
+            # Legacy flat fields (anthropic view) plus the provider map.
+            "model": ai.default_model_for(settings, "anthropic"),
+            "ai_ready": any(p["ready"] for p in providers.values()),
+            "ai_source": anthropic["source"],
+            "key_masked": anthropic["key_masked"],
+            "providers": providers,
+            "ai": {"provider": sel_provider, "model": sel_model},
         })
 
     def h_settings_post(self, match, query):
         body = self._body_json()
-        patch = {}
-        if "anthropic_api_key" in body:
+        settings = self.store.get_settings()
+        patch: dict = {}
+
+        if "anthropic_api_key" in body:  # legacy shape, kept working
             value = body["anthropic_api_key"]
             if value is not None and not isinstance(value, str):
                 raise ApiError("anthropic_api_key must be a string")
@@ -424,6 +434,48 @@ class ForgeHandler(BaseHTTPRequestHandler):
             if value and value not in [m["id"] for m in ai.MODELS]:
                 raise ApiError("unknown model")
             patch["model"] = value
+
+        if "providers" in body:
+            incoming = body["providers"]
+            if not isinstance(incoming, dict):
+                raise ApiError("providers must be an object")
+            merged = dict(settings.get("providers") or {})
+            for pid, conf in incoming.items():
+                if pid not in ai.PROVIDERS:
+                    raise ApiError(f"unknown provider: {pid}")
+                if not isinstance(conf, dict):
+                    raise ApiError("provider settings must be an object")
+                current = dict(merged.get(pid) or {})
+                for field in ("api_key", "base_url", "model"):
+                    if field not in conf:
+                        continue
+                    value = conf[field]
+                    if value is not None and not isinstance(value, str):
+                        raise ApiError(f"{pid}.{field} must be a string")
+                    value = (value or "").strip()
+                    if field == "base_url" and value and \
+                            not value.startswith(("http://", "https://")):
+                        raise ApiError("base_url must start with http(s)://")
+                    if value:
+                        current[field] = value
+                    else:
+                        current.pop(field, None)
+                if current:
+                    merged[pid] = current
+                else:
+                    merged.pop(pid, None)
+            patch["providers"] = merged or None
+
+        if "ai" in body:
+            selection = body["ai"]
+            if not isinstance(selection, dict):
+                raise ApiError("ai must be an object")
+            provider = selection.get("provider") or "anthropic"
+            if provider not in ai.PROVIDERS:
+                raise ApiError(f"unknown provider: {provider}")
+            patch["ai"] = {"provider": provider,
+                           "model": str(selection.get("model") or "").strip()}
+
         self.store.update_settings(patch)
         self.h_settings_get(match, query)
 
@@ -567,11 +619,15 @@ class ForgeHandler(BaseHTTPRequestHandler):
     def h_ai_chat(self, match, query):
         body = self._body_json()
         settings = self.store.get_settings()
-        key, _source = ai.resolve_key(settings)
-        if not key:
+        provider = body.get("provider") or ai.default_selection(settings)[0]
+        if provider not in ai.PROVIDERS:
+            raise ApiError(f"unknown provider: {provider}")
+        if not ai.provider_ready(settings, provider):
+            label = ai.PROVIDERS[provider]["label"]
+            what = ("a base URL" if provider == "compat" else "an API key")
             raise ApiError(
-                "No Anthropic API key yet. Add one in Settings (or export "
-                "ANTHROPIC_API_KEY) to enable the AI pane.", 400, code="no_key")
+                f"No {what} for {label} yet — add one in Settings to use it.",
+                400, code="no_key")
 
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -589,7 +645,9 @@ class ForgeHandler(BaseHTTPRequestHandler):
             raise ApiError("messages are empty")
 
         mode = body.get("mode") or "build"
-        model = body.get("model") or settings.get("model") or ai.DEFAULT_MODEL
+        model = body.get("model") or ai.default_model_for(settings, provider)
+        if not model:
+            raise ApiError("set a model for this provider in Settings")
         meta = None
         tree_paths: list[str] = []
         files: list[tuple[str, str]] = []
@@ -607,13 +665,12 @@ class ForgeHandler(BaseHTTPRequestHandler):
                     files.append((rel, f["content"]))
 
         system = ai.build_system(mode, meta, tree_paths, files)
-        payload, extra = ai.request_payload(model, system, clean,
-                                            body.get("max_tokens"))
         transport = getattr(self.server, "ai_transport", None)
 
         self._sse_begin()
         try:
-            for event in ai.stream_chat(key, payload, extra, transport):
+            for event in ai.chat(provider, model, system, clean, settings,
+                                 transport, body.get("max_tokens")):
                 if not self._sse(event):
                     return
         except ai.AIError as e:

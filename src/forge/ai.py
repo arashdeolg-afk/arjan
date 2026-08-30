@@ -37,6 +37,40 @@ MODELS = [
 # Models where a safety refusal can be rescued server-side.
 _FALLBACK_MODELS = {"claude-opus-5", "claude-fable-5"}
 
+# The AI pane is multi-provider: Claude is the first-class default, and
+# keys for other providers can be added later without code changes —
+# their model ids are free text, so new models need no forge release.
+PROVIDERS: dict[str, dict] = {
+    "anthropic": {
+        "label": "Claude (Anthropic)",
+        "env": "ANTHROPIC_API_KEY",
+        "needs_key": True,
+        "default_model": DEFAULT_MODEL,
+        "model_choice": "list",  # curated dropdown (MODELS)
+    },
+    "openai": {
+        "label": "OpenAI",
+        "env": "OPENAI_API_KEY",
+        "needs_key": True,
+        "default_model": "gpt-4o",
+        "model_choice": "free",
+    },
+    "gemini": {
+        "label": "Google Gemini",
+        "env": "GEMINI_API_KEY",
+        "needs_key": True,
+        "default_model": "gemini-2.0-flash",
+        "model_choice": "free",
+    },
+    "compat": {
+        "label": "OpenAI-compatible",
+        "env": "",
+        "needs_key": False,  # a local Ollama needs no key, just a base URL
+        "default_model": "",
+        "model_choice": "free",
+    },
+}
+
 MAX_CONTEXT_FILE = 30_000  # chars of any single file included as context
 MAX_TREE_PATHS = 200
 
@@ -88,6 +122,81 @@ def model_info(model_id: str) -> dict:
         if m["id"] == model_id:
             return m
     return {"id": model_id, "label": model_id, "max_tokens": 32000}
+
+
+# ------------------------------------------------------- provider registry
+
+
+def provider_conf(settings: dict, provider: str) -> dict:
+    conf = dict((settings.get("providers") or {}).get(provider) or {})
+    if provider == "anthropic" and not conf.get("api_key"):
+        legacy = str(settings.get("anthropic_api_key", "")).strip()
+        if legacy:
+            conf["api_key"] = legacy
+    return conf
+
+
+def resolve_provider_key(settings: dict, provider: str) -> tuple[str | None, str]:
+    """(key, source) for one provider — the environment wins over settings."""
+    spec = PROVIDERS[provider]
+    if spec["env"]:
+        env = os.environ.get(spec["env"], "").strip()
+        if env:
+            return env, "env"
+    saved = str(provider_conf(settings, provider).get("api_key", "")).strip()
+    if saved:
+        return saved, "settings"
+    return None, "none"
+
+
+def default_model_for(settings: dict, provider: str) -> str:
+    conf = provider_conf(settings, provider)
+    model = str(conf.get("model", "")).strip()
+    if model:
+        return model
+    if provider == "anthropic":
+        legacy = str(settings.get("model", "")).strip()
+        if legacy:
+            return legacy
+    return PROVIDERS[provider]["default_model"]
+
+
+def provider_ready(settings: dict, provider: str) -> bool:
+    if provider == "compat":
+        return bool(str(provider_conf(settings, "compat").get("base_url", "")).strip())
+    key, _source = resolve_provider_key(settings, provider)
+    return key is not None
+
+
+def provider_status(settings: dict) -> dict:
+    out = {}
+    for pid, spec in PROVIDERS.items():
+        key, source = resolve_provider_key(settings, pid)
+        entry = {
+            "label": spec["label"],
+            "ready": provider_ready(settings, pid),
+            "source": source,
+            "key_masked": mask_key(key) if key else None,
+            "default_model": default_model_for(settings, pid),
+            "model_choice": spec["model_choice"],
+            "needs_key": spec["needs_key"],
+        }
+        if pid == "anthropic":
+            entry["models"] = MODELS
+        if pid == "compat":
+            entry["base_url"] = str(provider_conf(settings, "compat").get("base_url", ""))
+        out[pid] = entry
+    return out
+
+
+def default_selection(settings: dict) -> tuple[str, str]:
+    """The (provider, model) the AI pane starts on."""
+    ai_conf = settings.get("ai") or {}
+    provider = ai_conf.get("provider") or "anthropic"
+    if provider not in PROVIDERS:
+        provider = "anthropic"
+    model = str(ai_conf.get("model", "")).strip() or default_model_for(settings, provider)
+    return provider, model
 
 
 def build_system(mode: str, meta: dict | None = None,
@@ -151,9 +260,164 @@ def _default_transport(url: str, headers: dict, body: bytes):
         raise AIError(f"could not reach the Anthropic API: {e.reason}")
 
 
+def _data_lines(resp):
+    """SSE 'data:' payloads from an iterable of raw lines."""
+    for raw in resp:
+        line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else raw.strip()
+        if line.startswith("data:"):
+            data = line[5:].strip()
+            if data:
+                yield data
+
+
+def _parse_anthropic(resp):
+    stop_reason = None
+    usage: dict = {}
+    for data in _data_lines(resp):
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        etype = event.get("type")
+        if etype == "content_block_delta":
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta":
+                yield {"type": "text", "text": delta.get("text", "")}
+        elif etype == "message_delta":
+            stop_reason = event.get("delta", {}).get("stop_reason")
+            usage = event.get("usage", {}) or usage
+        elif etype == "message_stop":
+            break
+        elif etype == "error":
+            message = event.get("error", {}).get("message", "stream error")
+            yield {"type": "error", "message": message}
+            return
+    if stop_reason == "refusal":
+        yield {"type": "error",
+               "message": "Claude declined this request (safety refusal)."}
+        return
+    yield {"type": "done", "stop_reason": stop_reason, "usage": usage}
+
+
+def _parse_openai(resp):
+    finish = None
+    for data in _data_lines(resp):
+        if data == "[DONE]":
+            break
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        if event.get("error"):
+            yield {"type": "error",
+                   "message": event["error"].get("message", "stream error")}
+            return
+        choices = event.get("choices") or []
+        if choices:
+            text = (choices[0].get("delta") or {}).get("content")
+            if text:
+                yield {"type": "text", "text": text}
+            finish = choices[0].get("finish_reason") or finish
+    yield {"type": "done", "stop_reason": finish, "usage": {}}
+
+
+def _parse_gemini(resp):
+    finish = None
+    for data in _data_lines(resp):
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        if event.get("error"):
+            yield {"type": "error",
+                   "message": event["error"].get("message", "stream error")}
+            return
+        for cand in event.get("candidates") or []:
+            for part in (cand.get("content") or {}).get("parts") or []:
+                if part.get("text"):
+                    yield {"type": "text", "text": part["text"]}
+            finish = cand.get("finishReason") or finish
+    yield {"type": "done", "stop_reason": finish, "usage": {}}
+
+
+_PARSERS = {
+    "anthropic": _parse_anthropic,
+    "openai": _parse_openai,
+    "compat": _parse_openai,
+    "gemini": _parse_gemini,
+}
+
+
+def prepare_request(provider: str, model: str, system: str,
+                    messages: list[dict], settings: dict,
+                    max_tokens: int | None = None) -> tuple[str, dict, dict]:
+    """(url, headers, payload) for a streaming chat call on any provider."""
+    if provider not in PROVIDERS:
+        raise AIError(f"unknown provider: {provider}", 400)
+    conf = provider_conf(settings, provider)
+    key, _source = resolve_provider_key(settings, provider)
+
+    if provider == "anthropic":
+        payload, extra = request_payload(model, system, messages, max_tokens)
+        headers = {
+            "content-type": "application/json",
+            "x-api-key": key or "",
+            "anthropic-version": API_VERSION,
+            "accept": "text/event-stream",
+        }
+        headers.update(extra)
+        return API_URL, headers, payload
+
+    if provider in ("openai", "compat"):
+        default_base = "https://api.openai.com/v1" if provider == "openai" else ""
+        base = str(conf.get("base_url", "")).strip() or default_base
+        if not base:
+            raise AIError("set a base URL for the OpenAI-compatible provider "
+                          "in Settings", 400)
+        headers = {"content-type": "application/json",
+                   "accept": "text/event-stream"}
+        if key:
+            headers["authorization"] = f"Bearer {key}"
+        payload = {
+            "model": model,
+            "stream": True,
+            "messages": ([{"role": "system", "content": system}] if system else [])
+            + messages,
+        }
+        return base.rstrip("/") + "/chat/completions", headers, payload
+
+    # gemini
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:streamGenerateContent?alt=sse")
+    headers = {"content-type": "application/json",
+               "accept": "text/event-stream",
+               "x-goog-api-key": key or ""}
+    contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                 "parts": [{"text": m["content"]}]} for m in messages]
+    payload: dict = {"contents": contents}
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+    return url, headers, payload
+
+
+def chat(provider: str, model: str, system: str, messages: list[dict],
+         settings: dict, transport=None, max_tokens: int | None = None):
+    """Unified streaming chat: yields {'type': 'text'|'done'|'error', ...}."""
+    url, headers, payload = prepare_request(
+        provider, model, system, messages, settings, max_tokens)
+    transport = transport or _default_transport
+    resp = transport(url, headers, json.dumps(payload).encode("utf-8"))
+    try:
+        yield from _PARSERS[provider](resp)
+    finally:
+        close = getattr(resp, "close", None)
+        if close:
+            close()
+
+
 def stream_chat(key: str, payload: dict, extra_headers: dict | None = None,
                 transport=None):
-    """Yield {'type': 'text'|'done'|'error', ...} dicts from a streaming call."""
+    """Anthropic-only streaming call (kept for direct use and tests)."""
     headers = {
         "content-type": "application/json",
         "x-api-key": key,
@@ -162,47 +426,13 @@ def stream_chat(key: str, payload: dict, extra_headers: dict | None = None,
     }
     headers.update(extra_headers or {})
     transport = transport or _default_transport
-    body = json.dumps(payload).encode("utf-8")
-
-    resp = transport(API_URL, headers, body)
-    stop_reason = None
-    usage: dict = {}
+    resp = transport(API_URL, headers, json.dumps(payload).encode("utf-8"))
     try:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else raw.strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if not data:
-                continue
-            try:
-                event = json.loads(data)
-            except ValueError:
-                continue
-            etype = event.get("type")
-            if etype == "content_block_delta":
-                delta = event.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    yield {"type": "text", "text": delta.get("text", "")}
-            elif etype == "message_delta":
-                stop_reason = event.get("delta", {}).get("stop_reason")
-                usage = event.get("usage", {}) or usage
-            elif etype == "message_stop":
-                break
-            elif etype == "error":
-                message = event.get("error", {}).get("message", "stream error")
-                yield {"type": "error", "message": message}
-                return
+        yield from _parse_anthropic(resp)
     finally:
         close = getattr(resp, "close", None)
         if close:
             close()
-
-    if stop_reason == "refusal":
-        yield {"type": "error",
-               "message": "Claude declined this request (safety refusal)."}
-        return
-    yield {"type": "done", "stop_reason": stop_reason, "usage": usage}
 
 
 _FILE_BLOCK = re.compile(
