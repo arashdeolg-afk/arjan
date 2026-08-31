@@ -1,8 +1,10 @@
 # Working in this repo
 
-Two independent tools live here: `revops` (revenue tracking for the content
-studio) and `pmpaper` (a Polymarket paper-trading harness). They share only
-the repo and the stdlib-only rule — do not couple them.
+Three independent tools live here: `revops` (revenue tracking for the content
+studio), `polymkt` (a read-only Polymarket client) and `pmpaper` (a Polymarket
+paper-trading harness). They share only the repo and the stdlib-only rule — do
+not couple them. `polymkt` reads live prices; `pmpaper` measures whether a
+strategy has an edge. None of them import each other.
 
 ## revops
 
@@ -43,15 +45,45 @@ reorder those without re-reading the playbook's economics table.
 - **Honest gating.** `MIN_SAMPLE = 3`. Below that, flag low confidence rather
   than presenting a confident-looking ranking.
 
+## polymkt
+
+`src/polymkt` is a read-only Polymarket client (prediction-market prices as a
+probability feed), documented in `docs/POLYMKT.md`. It shares this repo's
+constraints — stdlib only, local-first, SQLite in `data/polymkt.db`, gitignored
+— and is independent of both `revops` and `pmpaper`; none of them import each
+other. It is the *price feed*; `pmpaper` is the *edge measurement*.
+
+Three things to know before changing it:
+
+- **It is read-only on purpose.** Placing orders needs EIP-712 signing, which
+  needs a crypto dependency. Don't add one without revisiting the stdlib rule.
+- **No endpoint has been verified against a live server** — the environment it
+  was written in blocks `*.polymarket.com`. Provenance is tracked per endpoint
+  in `endpoints.py`; `polymkt doctor` checks the catalog and promotes entries.
+  Record the date of a passing run in `docs/POLYMKT.md`.
+- **Credentials are environment-only.** Never a file, never a commit, never a
+  default. `config.credential_status()` must never return a secret.
+
+Same sample-size discipline as `revops`: `moves` prints `n` beside every change.
+
 ## Running things
 
 ```bash
 PYTHONPATH=src python3 -m revops demo      # sample data
 PYTHONPATH=src python3 -m revops report
+python3 polymkt.py demo                    # offline Polymarket walkthrough
+python3 polymkt.py doctor                  # verify endpoints (needs network)
+PYTHONPATH=src python3 -m pmpaper validate # prove the harness works
 python3 -m unittest discover -s tests -v   # tests
 ```
 
-Tests set `REVOPS_DB` to a temp path — never let a test touch `data/revops.db`.
+`polymkt.py` at the repo root is a path shim so the CLI runs without
+`PYTHONPATH`; the bash-only `PYTHONPATH=src python3 -m polymkt` form still
+works but breaks on Windows PowerShell.
+
+Tests set `REVOPS_DB` / `POLYMKT_DB` to a temp path — never let a test touch
+`data/revops.db` or `data/polymkt.db`. Every `polymkt` and `pmpaper` test runs
+offline; nothing in the suite may reach the network.
 
 ## pmpaper
 

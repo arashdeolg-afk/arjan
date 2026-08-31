@@ -168,3 +168,61 @@ docs/SPRINT.md     the 7-day plan to a first paying client
 src/pmpaper/       independent: Polymarket paper-trading harness
 docs/POLYMARKET.md what it measures and what it found
 ```
+
+---
+
+## Also in this repo: `polymkt`
+
+A read-only [Polymarket](https://polymarket.com) client, same house rules —
+stdlib only, local-first, SQLite. Prediction-market prices are probabilities,
+and this reads them from a terminal.
+
+From a checkout, `polymkt.py` works on every platform with no environment
+setup — run it from the repo root:
+
+```bash
+python3 polymkt.py demo               # synthetic data, no network
+python3 polymkt.py markets            # top markets by volume
+python3 polymkt.py market <slug> --live
+python3 polymkt.py watch add <slug>
+python3 polymkt.py snap               # cron-friendly snapshot
+python3 polymkt.py moves --days 7
+python3 polymkt.py doctor             # verify endpoints (needs network)
+```
+
+On Windows PowerShell the interpreter is usually `python` or `py -3`, and the
+`PYTHONPATH=src …` prefix used elsewhere in this README is **bash-only** — it
+fails with `The term 'PYTHONPATH=src' is not recognized`. Use the shim above,
+or set the variable as its own statement:
+
+```powershell
+cd $HOME\arjan
+python polymkt.py doctor          # simplest
+
+$env:PYTHONPATH = "src"           # or the module form, in two steps
+python -m polymkt doctor
+```
+
+Needs Python 3.10 or newer; the shim says so plainly if it isn't.
+
+It answers what the API alone won't: **how a probability moved.** `snap` records
+book snapshots locally, append-only; `moves` reports the change with its sample
+size attached, because two snapshots is a line and not a trend.
+
+No credentials required — everything it reads is public. See
+**[docs/POLYMKT.md](docs/POLYMKT.md)** for the API gotchas (token id vs
+condition id, JSON-inside-JSON, why the midpoint isn't the price you pay) and
+for which endpoints are still unverified.
+
+```
+src/polymkt/
+  http.py          urllib client: throttle, backoff, injectable transport
+  endpoints.py     the API surface as data, with per-endpoint provenance
+  models.py        normalisation — where the JSON-inside-JSON is untangled
+  gamma.py         discovery: events, markets, search
+  clob.py          live prices, order books, history
+  data.py          positions, activity, holders
+  store.py         watchlist + append-only quote history
+  samples.py       synthetic payloads, so demo and tests run offline
+  cli.py           the interface
+```
