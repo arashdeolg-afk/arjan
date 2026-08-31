@@ -33,6 +33,36 @@ export REVOPS_DB=data/revops.db     # real data; gitignored
 
 ---
 
+## The 7-day sprint — start here if you want money this week
+
+The fastest predictable revenue isn't content, it's **client work sold by
+direct outreach with free spec work attached**. No audience needed, no
+algorithm in the loop: if 15 contacts produce 1 sale, 45 produce ~3, and that
+is a decision rather than a hope.
+
+Full plan, targeting, and the actual message copy: **[docs/SPRINT.md](docs/SPRINT.md)**
+
+```bash
+revops sprint --goal 600 --price 200      # computes your daily contact target
+revops lead import prospects.csv          # bulk-load day 1's list (template in docs/)
+revops lead add "Pixel Forge" --segment indie-game --handle @pixelforge \
+       --product "roguelike launching in March"
+revops lead set 1 spec_made               # made the free 5-second clip
+revops lead set 1 contacted               # sent it
+revops lead set 1 replied
+revops lead set 1 won --amount 200        # records revenue automatically
+revops pipeline                           # funnel, conversion, on-track or behind
+revops followups                          # who to chase today
+```
+
+`pipeline` blends your real conversion rates with baseline assumptions, so one
+lucky close never reads as a 100% close rate — and once you have real volume,
+your numbers take over. It recomputes the daily target every time, so falling
+behind shows up as a bigger number tomorrow rather than a nasty surprise on
+day 7.
+
+---
+
 ## Daily use
 
 ```bash
@@ -77,6 +107,10 @@ alias revops='PYTHONPATH=/home/user/arjan/src python3 -m revops'
 | `report --days N` | Full analysis: P&L, platforms, topics, hooks, actions |
 | `dash` | Self-contained HTML dashboard |
 | `demo` | Seed realistic sample data |
+| `sprint` | Start a revenue sprint; computes the daily contact target |
+| `lead` | Add and advance sales prospects (`add` / `set` / `list`) |
+| `pipeline` | Funnel, conversion rates, and whether you're on pace |
+| `followups` | Who to chase today, hottest leads first |
 
 ---
 
@@ -95,6 +129,28 @@ until there's enough data to justify an opinion.
 
 ---
 
+## Also in this repo: pmpaper
+
+A separate, independent tool: a **paper-trading harness for Polymarket binary
+markets** (`src/pmpaper/`, docs in **[docs/POLYMARKET.md](docs/POLYMARKET.md)**).
+It answers whether a trading strategy has an edge that survives spread,
+latency and fees — before any money is risked.
+
+```bash
+PYTHONPATH=src python3 -m pmpaper validate    # prove the harness itself works
+PYTHONPATH=src python3 -m pmpaper probe       # can this machine reach the APIs?
+PYTHONPATH=src python3 -m pmpaper record --duration 3600
+PYTHONPATH=src python3 -m pmpaper replay 1 fair-value-arb --latency 150
+```
+
+It is validated against a synthetic market whose true edge is known by
+construction, so it can be checked for both false positives and false
+negatives. The headline finding: on 5-minute crypto binaries the edge is
+purely a latency race against the market maker, and it inverts the moment
+your latency exceeds theirs.
+
+---
+
 ## Layout
 
 ```
@@ -103,9 +159,14 @@ src/revops/
   ledger.py        writes: content, posts, metrics, revenue, costs
   analytics.py     reads: P&L, platform efficiency, what's working
   monetization.py  revenue streams, unlock gates, activation steps
+  sprint.py        outreach funnel: stages, conversion math, follow-ups
   dashboard.py     self-contained HTML output
   cli.py           the interface
-docs/PLAYBOOK.md   the strategy — the important file
+docs/PLAYBOOK.md   the long-run strategy
+docs/SPRINT.md     the 7-day plan to a first paying client
+
+src/pmpaper/       independent: Polymarket paper-trading harness
+docs/POLYMARKET.md what it measures and what it found
 ```
 
 ---
@@ -149,7 +210,7 @@ book snapshots locally, append-only; `moves` reports the change with its sample
 size attached, because two snapshots is a line and not a trend.
 
 No credentials required — everything it reads is public. See
-**[docs/POLYMARKET.md](docs/POLYMARKET.md)** for the API gotchas (token id vs
+**[docs/POLYMKT.md](docs/POLYMKT.md)** for the API gotchas (token id vs
 condition id, JSON-inside-JSON, why the midpoint isn't the price you pay) and
 for which endpoints are still unverified.
 

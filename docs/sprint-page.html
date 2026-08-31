@@ -1,0 +1,438 @@
+<title>First Client Sprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F2F3F5; --surface:#FFFFFF; --sunk:#E9EBEF;
+  --ink:#16181D; --ink-2:#4A505C; --ink-3:#767D8B;
+  --line:#DDE0E5; --line-2:#C9CED6;
+  --signal:#C25E00; --signal-soft:#FBEEE1;
+  --money:#0F6E5C; --money-soft:#E2F0EC;
+  --dead:#8A3324;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#101319; --surface:#171B23; --sunk:#0B0E13;
+    --ink:#E8EAEE; --ink-2:#A8B0BE; --ink-3:#79808E;
+    --line:#262C37; --line-2:#343C4A;
+    --signal:#F0A045; --signal-soft:#2A1E10;
+    --money:#4FD1B0; --money-soft:#0E241F;
+    --dead:#E08270;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101319; --surface:#171B23; --sunk:#0B0E13;
+  --ink:#E8EAEE; --ink-2:#A8B0BE; --ink-3:#79808E;
+  --line:#262C37; --line-2:#343C4A;
+  --signal:#F0A045; --signal-soft:#2A1E10;
+  --money:#4FD1B0; --money-soft:#0E241F;
+  --dead:#E08270;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font:400 16.5px/1.62 "Source Sans 3",ui-sans-serif,system-ui,sans-serif;
+  -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:44rem;margin:0 auto;padding:0 1.15rem 5rem}
+
+/* ---- masthead ---- */
+.mast{padding:3.2rem 0 1.6rem}
+.eyebrow{
+  font-family:Archivo,sans-serif;font-weight:600;font-size:.7rem;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--signal);
+}
+h1{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:clamp(2.1rem,7vw,3rem);
+  line-height:1.02;letter-spacing:-.03em;margin:.5rem 0 .8rem;text-wrap:balance;
+}
+.lede{font-size:1.1rem;color:var(--ink-2);margin:0;max-width:34rem}
+.lede b{color:var(--ink);font-weight:600}
+
+.targets{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));
+  gap:.7rem;margin:1.8rem 0 0;
+}
+.tgt{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:.85rem .95rem}
+.tgt .n{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:1.6rem;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums;display:block;line-height:1.1;
+}
+.tgt .l{font-size:.76rem;color:var(--ink-3);text-transform:uppercase;letter-spacing:.07em;
+  margin-top:.2rem;display:block}
+
+/* ---- nav ---- */
+nav{
+  position:sticky;top:0;z-index:10;background:var(--ground);
+  border-bottom:1px solid var(--line);margin:2.2rem -1.15rem 0;padding:.6rem 1.15rem;
+  overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;
+}
+nav a{
+  font-family:Archivo,sans-serif;font-size:.76rem;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-3);text-decoration:none;
+  margin-right:1.1rem;padding:.2rem 0;border-bottom:2px solid transparent;
+}
+nav a:hover,nav a:focus-visible{color:var(--signal);border-bottom-color:var(--signal)}
+
+/* ---- sections ---- */
+section{padding-top:2.9rem}
+h2{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:1.35rem;letter-spacing:-.02em;
+  margin:0 0 .3rem;text-wrap:balance;
+}
+h2 .num{color:var(--signal);font-variant-numeric:tabular-nums;margin-right:.45rem}
+.sub{color:var(--ink-3);font-size:.95rem;margin:0 0 1.15rem}
+h3{font-family:Archivo,sans-serif;font-weight:600;font-size:1rem;margin:1.7rem 0 .5rem;
+  letter-spacing:-.01em}
+p{margin:0 0 .9rem}
+
+/* ---- tables ---- */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
+  border:1px solid var(--line);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:30rem}
+th{
+  font-family:Archivo,sans-serif;font-size:.68rem;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--ink-3);text-align:left;font-weight:600;
+  padding:.6rem .85rem;border-bottom:1px solid var(--line);
+}
+td{padding:.62rem .85rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+td b{font-weight:600}
+.no{color:var(--dead)}
+.yes{color:var(--money);font-weight:600}
+
+/* ---- offer ---- */
+.offer{
+  background:var(--signal-soft);border:1px solid var(--signal);
+  border-radius:3px;padding:1.4rem 1.3rem;margin:0 0 1.3rem;
+}
+.offer p{margin:0;font-size:1.12rem;line-height:1.5}
+.offer .price{
+  font-family:Archivo,sans-serif;font-weight:700;color:var(--signal);
+  font-size:1.25rem;letter-spacing:-.01em;
+}
+
+/* ---- message blocks ---- */
+.msg{border:1px solid var(--line-2);border-radius:3px;background:var(--surface);
+  margin:0 0 1.1rem;overflow:hidden}
+.msg-head{
+  display:flex;align-items:center;justify-content:space-between;gap:.8rem;
+  padding:.5rem .55rem .5rem .85rem;background:var(--sunk);
+  border-bottom:1px solid var(--line);
+}
+.msg-head span{
+  font-family:Archivo,sans-serif;font-size:.72rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);
+}
+button.copy{
+  font-family:Archivo,sans-serif;font-size:.72rem;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--surface);background:var(--ink);
+  border:none;border-radius:2px;padding:.36rem .7rem;cursor:pointer;
+}
+button.copy:hover{background:var(--signal)}
+button.copy:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+button.copy[data-done="1"]{background:var(--money)}
+.msg pre{
+  margin:0;padding:.95rem .85rem;font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:.84rem;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--ink);
+}
+.msg pre mark{background:var(--signal-soft);color:var(--signal);
+  border-radius:2px;padding:0 .18em;font-weight:500}
+
+/* ---- day list ---- */
+.day{border-top:1px solid var(--line);padding:1.15rem 0}
+.day:last-of-type{border-bottom:1px solid var(--line)}
+.day-h{display:flex;align-items:baseline;gap:.7rem;margin-bottom:.15rem}
+.day-n{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:.72rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--signal);flex:none;
+}
+.day-t{font-family:Archivo,sans-serif;font-weight:600;font-size:1.02rem;letter-spacing:-.01em}
+.day-time{margin-left:auto;font-size:.78rem;color:var(--ink-3);flex:none;
+  font-variant-numeric:tabular-nums}
+ul.check{list-style:none;padding:0;margin:.6rem 0 0}
+ul.check li{display:flex;gap:.6rem;align-items:flex-start;padding:.2rem 0;font-size:.95rem}
+ul.check input{margin:.42rem 0 0;accent-color:var(--signal);flex:none;
+  width:.95rem;height:.95rem;cursor:pointer}
+ul.check label{cursor:pointer;color:var(--ink-2)}
+ul.check input:checked + label{color:var(--ink-3);text-decoration:line-through}
+
+.loop{background:var(--surface);border:1px solid var(--line);border-radius:3px;
+  padding:.3rem .95rem;margin:.7rem 0 0}
+.loop div{display:flex;gap:.85rem;padding:.5rem 0;border-bottom:1px solid var(--line);
+  font-size:.92rem;align-items:baseline}
+.loop div:last-child{border-bottom:none}
+.loop b{font-family:"JetBrains Mono",monospace;font-size:.8rem;color:var(--signal);
+  flex:none;width:3.6rem;font-variant-numeric:tabular-nums}
+.loop code{font-family:"JetBrains Mono",monospace;font-size:.78rem;color:var(--ink-3);
+  margin-left:auto;flex:none;display:none}
+@media(min-width:34rem){.loop code{display:block}}
+
+/* ---- odds ---- */
+.odds{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));margin-bottom:1.1rem}
+.odd{border:1px solid var(--line);border-radius:3px;padding:.9rem;background:var(--surface)}
+.odd .n{font-family:Archivo,sans-serif;font-weight:700;font-size:1.5rem;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;display:block}
+.odd .l{font-size:.79rem;color:var(--ink-3);margin-top:.15rem;display:block;line-height:1.35}
+.odd.good .n{color:var(--money)}
+.odd.bad .n{color:var(--dead)}
+
+.callout{border-left:3px solid var(--signal);padding:.15rem 0 .15rem 1rem;margin:1.2rem 0;
+  color:var(--ink-2)}
+.callout b{color:var(--ink)}
+
+footer{margin-top:3.4rem;padding-top:1.2rem;border-top:1px solid var(--line);
+  color:var(--ink-3);font-size:.85rem}
+code.inline{font-family:"JetBrains Mono",monospace;font-size:.85em;
+  background:var(--sunk);padding:.1em .35em;border-radius:2px;color:var(--ink-2)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="eyebrow">7-Day Revenue Sprint</div>
+  <h1>Get one paying client this week</h1>
+  <p class="lede">Not content. Not ad revenue. <b>Client work sold by direct outreach with free spec work attached</b> — the only path where the outcome is a function of effort you control.</p>
+  <div class="targets">
+    <div class="tgt"><span class="n">44</span><span class="l">contacts</span></div>
+    <div class="tgt"><span class="n">6/day</span><span class="l">the daily rate</span></div>
+    <div class="tgt"><span class="n">$600</span><span class="l">target</span></div>
+    <div class="tgt"><span class="n">95min</span><span class="l">per day</span></div>
+  </div>
+</header>
+
+<nav>
+  <a href="#why">Why this</a>
+  <a href="#offer">The offer</a>
+  <a href="#who">Who</a>
+  <a href="#messages">Messages</a>
+  <a href="#days">Day by day</a>
+  <a href="#price">Price</a>
+  <a href="#odds">Odds</a>
+  <a href="#fix">Fixes</a>
+</nav>
+
+<section id="why">
+  <h2><span class="num">01</span>Why this and nothing else</h2>
+  <p class="sub">Every other option fails the 7-day test for a structural reason.</p>
+  <div class="scroll"><table>
+    <tr><th>Option</th><th>Why it can't pay inside 7 days</th></tr>
+    <tr><td><b>Ad revenue</b></td><td class="no">Threshold-gated. 1,000 subs / 10k followers minimum. Not reachable.</td></tr>
+    <tr><td><b>Affiliate</b></td><td class="no">Needs traffic volume you don't have. Realistically $0–$20.</td></tr>
+    <tr><td><b>Digital products</b></td><td class="no">Needs an audience to sell to. You're building one, not done.</td></tr>
+    <tr><td><b>Merch</b></td><td class="no">Needs a recurring character people already love.</td></tr>
+    <tr><td><b>A viral hit</b></td><td class="no">Not a plan. A lottery ticket with someone else's algorithm.</td></tr>
+    <tr><td><b>Client work</b></td><td class="yes">Volume you control. 15 contacts → 1 sale, so 45 → ~3.</td></tr>
+  </table></div>
+  <div class="callout"><b>There is no algorithm in the loop.</b> No audience requirement, no threshold to wait for. You already own the production capability — this points it at someone holding a budget.</div>
+</section>
+
+<section id="offer">
+  <h2><span class="num">02</span>The offer</h2>
+  <div class="offer">
+    <p>A free <b>5-second animated spot</b> for their product, made <i>before</i> they reply.<br>
+    If they want a longer one: <span class="price">$200, 48-hour turnaround.</span></p>
+  </div>
+  <p>This converts where a normal pitch dies, for three reasons:</p>
+  <div class="scroll"><table>
+    <tr><th>Mechanism</th><th>Why it works</th></tr>
+    <tr><td><b>Removes imagination</b></td><td>They aren't evaluating a promise. They're watching their own product already animated.</td></tr>
+    <tr><td><b>Reciprocity</b></td><td>You gave first, no strings. Rare enough in a DM inbox to earn a reply on its own.</td></tr>
+    <tr><td><b>Filters instantly</b></td><td>Someone who watches their product animated and feels nothing was never going to buy. You lose them in a day, not a month.</td></tr>
+  </table></div>
+  <p style="margin-top:1rem">Cost to you: about <b>$0.50–$2.00 in credits and 10 minutes</b> per spec piece. Forty across the week is $40–80.</p>
+</section>
+
+<section id="who">
+  <h2><span class="num">03</span>Who to target</h2>
+  <p class="sub">Aim precisely. The aesthetic has to match or the spec piece lands wrong.</p>
+  <div class="scroll"><table>
+    <tr><th>Segment</th><th>Why</th><th>Where</th></tr>
+    <tr>
+      <td><b>Indie game devs</b><br><span style="color:var(--money);font-size:.82rem">best target</span></td>
+      <td>Launching in &lt;60 days. Deadline, allocated budget, no in-house animator.</td>
+      <td>Steam&nbsp;Coming&nbsp;Soon · itch.io · r/IndieDev · <span class="no">#screenshotsaturday</span></td>
+    </tr>
+    <tr>
+      <td><b>Anime &amp; gaming Shopify stores</b></td>
+      <td>Exact aesthetic match. Buy creative continuously, have revenue to pay from.</td>
+      <td>Anime apparel / figures / peripherals · IG brands running static ads</td>
+    </tr>
+    <tr>
+      <td><b>VTubers &amp; small streamers</b></td>
+      <td>Perfect style match, decide in minutes. Smaller budgets ($100–200).</td>
+      <td>Twitch 100–2,000 followers · VTuber tags on X</td>
+    </tr>
+  </table></div>
+  <div class="callout"><b>The one filter that matters: a dated launch inside 60 days.</b> It means budget is already allocated and the deadline is real. A dev with no date has no reason to decide this week.</div>
+  <p><b>Do not</b> pitch anime-style work to plumbing companies or law firms. The style mismatch kills a good offer.</p>
+</section>
+
+<section id="messages">
+  <h2><span class="num">04</span>The messages</h2>
+  <p class="sub">Send the clip in the first message. Never ask permission to send it.</p>
+
+  <div class="msg">
+    <div class="msg-head"><span>First contact</span><button class="copy" type="button">Copy</button></div>
+    <pre>made this for <mark>[Game]</mark> — no strings
+
+Hey <mark>[Name]</mark>, been following <mark>[Game]</mark> since <mark>[specific detail you actually noticed]</mark>.
+Made you a 5-second animated spot for it this morning: <mark>[link]</mark>
+
+Yours to use. Free, no catch, no credit needed.
+
+If a longer one would help for the Steam page or socials, I do those
+for $200 with a 48h turnaround. Either way, hope the clip is useful.
+
+— Arjan</pre>
+  </div>
+
+  <div class="scroll"><table>
+    <tr><th>Line</th><th>Why it's there</th></tr>
+    <tr><td><b>The specific detail</b></td><td>The whole message. Proves this isn't a blast. Can't find one in 30 seconds? Skip the prospect.</td></tr>
+    <tr><td><b>"Free, no catch"</b></td><td>Pre-empts the suspicion that kills most cold DMs.</td></tr>
+    <tr><td><b>Price stated</b></td><td>No "let's hop on a call." Removing the negotiation step is what makes a 48-hour close possible.</td></tr>
+    <tr><td><b>Offer as a P.S.</b></td><td>The gift has to read as a gift, not as bait.</td></tr>
+  </table></div>
+
+  <h3>Follow-ups</h3>
+  <p>Most deals die from silence, not rejection. <code class="inline">revops followups</code> queues these.</p>
+
+  <div class="msg">
+    <div class="msg-head"><span>+3 days</span><button class="copy" type="button">Copy</button></div>
+    <pre>hey — no worries if the clip wasn't a fit. Just wanted to make sure
+you saw it: <mark>[link]</mark>. Happy to redo it in a different style if it's
+close but not right.</pre>
+  </div>
+
+  <div class="msg">
+    <div class="msg-head"><span>+7 days · last one</span><button class="copy" type="button">Copy</button></div>
+    <pre>last ping from me — if a trailer ever comes up, I'm around.
+Good luck with the launch.</pre>
+  </div>
+
+  <div class="callout"><b>Three touches, then stop.</b> A clean exit keeps the door open. A fourth message closes it permanently.</div>
+</section>
+
+<section id="days">
+  <h2><span class="num">05</span>Day by day</h2>
+  <p class="sub">Tick these off — they save on this device.</p>
+
+  <div class="day">
+    <div class="day-h"><span class="day-n">Day 1</span><span class="day-t">Setup</span><span class="day-time">2 hrs</span></div>
+    <p class="sub" style="margin:.2rem 0 0">The only heavy day.</p>
+    <ul class="check" data-key="d1">
+      <li><input type="checkbox" id="d1a"><label for="d1a">Pick <b>one</b> segment. One. Not three.</label></li>
+      <li><input type="checkbox" id="d1b"><label for="d1b">Build a list of <b>50 prospects</b>, with a specific detail noted for each</label></li>
+      <li><input type="checkbox" id="d1c"><label for="d1c">Set up a payment link (Stripe or PayPal invoice — 15 min)</label></li>
+      <li><input type="checkbox" id="d1d"><label for="d1d">Cut a <b>45-second showreel</b> from your six best existing clips</label></li>
+      <li><input type="checkbox" id="d1e"><label for="d1e">Run <code class="inline">revops sprint --goal 600 --price 200</code></label></li>
+    </ul>
+  </div>
+
+  <div class="day">
+    <div class="day-h"><span class="day-n">Days 2–6</span><span class="day-t">The engine</span><span class="day-time">95 min/day</span></div>
+    <div class="loop">
+      <div><b>20 min</b><span>Source 6 prospects, note a real detail on each</span><code>lead add</code></div>
+      <div><b>30 min</b><span>Batch-generate 6 spec clips</span><code>lead set N spec_made</code></div>
+      <div><b>30 min</b><span>Send 6 personalised messages</span><code>lead set N contacted</code></div>
+      <div><b>15 min</b><span>Follow-ups and log replies</span><code>followups</code></div>
+    </div>
+    <p style="margin-top:.8rem;color:var(--ink-2)">Run <code class="inline">revops pipeline</code> each morning. It tells you whether you're on pace and how many contacts today needs.</p>
+  </div>
+
+  <div class="day">
+    <div class="day-h"><span class="day-n">Day 7</span><span class="day-t">Close</span><span class="day-time">2 hrs</span></div>
+    <ul class="check" data-key="d7">
+      <li><input type="checkbox" id="d7a"><label for="d7a">Final follow-up to everyone who hasn't replied</label></li>
+      <li><input type="checkbox" id="d7b"><label for="d7b">Deliver anything sold (48h turnaround starts on payment)</label></li>
+      <li><input type="checkbox" id="d7c"><label for="d7c">Ask every paying client for a <b>one-line testimonial</b> — worth more than the fee</label></li>
+      <li><input type="checkbox" id="d7d"><label for="d7d">Check which segment converted; aim there next week</label></li>
+    </ul>
+  </div>
+</section>
+
+<section id="price">
+  <h2><span class="num">06</span>Why $200 is the right number</h2>
+  <p>Market rate for indie animation runs about <b>$39/hour</b>, and a traditional animator quotes <b>$200–$800</b> for a 15–30 second spot.</p>
+  <div class="scroll"><table>
+    <tr><th>When</th><th class="num">Price</th><th>Why</th></tr>
+    <tr><td>First 3 clients</td><td class="num"><b>$150–200</b></td><td>You're buying testimonials, not maximising rate</td></tr>
+    <tr><td>After 3 testimonials</td><td class="num"><b>$400</b></td><td>Proof lets you double</td></tr>
+    <tr><td>Rush (&lt;24h)</td><td class="num"><b>+50%</b></td><td>Deadline pressure is worth real money to them</td></tr>
+  </table></div>
+  <div class="callout"><b>Price against their alternative, never against your cost.</b> $200 sits at the bottom of the range they already expect. The piece takes you about an hour — roughly 5x market hourly. That gap is the whole business, and it exists because AI collapsed production time while market price hasn't moved yet.</div>
+  <p>Take payment <b>on delivery</b> under $300 — a deposit adds a step and costs more in lost deals than it saves in risk. Above $300, 50% upfront.</p>
+</section>
+
+<section id="odds">
+  <h2><span class="num">07</span>Honest odds</h2>
+  <p class="sub">Running the full 44 contacts.</p>
+  <div class="odds">
+    <div class="odd"><span class="n">~10</span><span class="l">replies</span></div>
+    <div class="odd"><span class="n">2–3</span><span class="l">closes at $200</span></div>
+    <div class="odd good"><span class="n">75–85%</span><span class="l">chance of at least one sale</span></div>
+    <div class="odd bad"><span class="n">15–25%</span><span class="l">chance of zero</span></div>
+  </div>
+  <div class="callout"><b>The zero case is real</b> and usually means the targeting or spec quality was off — not that the model is wrong. The single biggest predictor is volume actually sent. Nearly everyone who fails at this fails by sending 8 messages instead of 44, then concluding it doesn't work.</div>
+</section>
+
+<section id="fix">
+  <h2><span class="num">08</span>What goes wrong</h2>
+  <div class="scroll"><table>
+    <tr><th>Symptom</th><th>Diagnosis</th><th>Fix</th></tr>
+    <tr><td>20+ sent, 0 replies</td><td>Spec clips generic, or the detail is fake</td><td>Make the clip about <i>their specific product</i>, not a generic anime loop</td></tr>
+    <tr><td>Replies but no closes</td><td>Price ambiguity, too many steps</td><td>State price and turnaround in message one. Never propose a call.</td></tr>
+    <tr><td>"Looks great!" then silence</td><td>No deadline</td><td>"I've got a slot open Thursday — want it?"</td></tr>
+    <tr><td>Can't find 6/day</td><td>Segment too narrow</td><td>Widen to the next segment</td></tr>
+    <tr><td>Clips take &gt;15 min</td><td>Over-polishing a freebie</td><td>It's a 5-second teaser. Ship rough.</td></tr>
+  </table></div>
+</section>
+
+<footer>
+  Tracked by <code class="inline">revops</code> — run <code class="inline">revops pipeline</code> for live funnel, conversion rates, and today's target. Full docs in <code class="inline">docs/SPRINT.md</code>.
+</footer>
+</div>
+
+<script>
+(function(){
+  document.querySelectorAll("button.copy").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var pre = btn.closest(".msg").querySelector("pre");
+      var text = pre.innerText;
+      var done = function(){
+        btn.textContent = "Copied";
+        btn.setAttribute("data-done","1");
+        setTimeout(function(){ btn.textContent="Copy"; btn.removeAttribute("data-done"); }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else { fallback(); }
+      function fallback(){
+        var ta = document.createElement("textarea");
+        ta.value = text; ta.style.position="fixed"; ta.style.opacity="0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); } catch(e){ btn.textContent="Select it"; }
+        document.body.removeChild(ta);
+      }
+    });
+  });
+
+  // Checkbox state persists per viewer. Storage can throw in private
+  // windows and preview contexts, so every access is guarded.
+  var KEY = "sprint-checks-v1";
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch(e){ saved = {}; }
+  var boxes = document.querySelectorAll("ul.check input[type=checkbox]");
+  boxes.forEach(function(b){
+    if (saved[b.id]) b.checked = true;
+    b.addEventListener("change", function(){
+      saved[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch(e){}
+    });
+  });
+})();
+</script>

@@ -8,7 +8,7 @@ terminal and stores snapshots locally so you can see how a probability
 Scope is deliberately read-only: discovery (Gamma), live prices and books
 (CLOB), and account/market activity (Data). Placing orders needs EIP-712
 signing, which needs a crypto dependency, and this repo is stdlib-only.
-See docs/POLYMARKET.md for why that line is drawn where it is.
+See docs/POLYMKT.md for why that line is drawn where it is.
 """
 
 __version__ = "0.1.0"

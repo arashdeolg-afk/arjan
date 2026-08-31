@@ -7,7 +7,7 @@ would actually cross.
 
 Read-only by design. Placing an order requires an EIP-712 signature over
 the order struct, which requires a secp256k1 implementation — a real
-dependency, and this repo is stdlib-only. See docs/POLYMARKET.md.
+dependency, and this repo is stdlib-only. See docs/POLYMKT.md.
 """
 
 from __future__ import annotations

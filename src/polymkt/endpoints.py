@@ -7,7 +7,7 @@ come from prior knowledge and have not been checked against a live server.
 Rather than pretend otherwise, every entry carries its provenance, and
 `polymkt doctor` probes the whole catalog and reports what actually
 answers. Once a run confirms an entry, promote its `confidence` to
-"verified" and note the date in docs/POLYMARKET.md.
+"verified" and note the date in docs/POLYMKT.md.
 
 Legend for `confidence`, weakest to strongest:
   recall     — believed correct, never confirmed against anything
