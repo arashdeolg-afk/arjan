@@ -1,5 +1,11 @@
 # Working in this repo
 
+Two independent tools live here: `revops` (revenue tracking for the content
+studio) and `pmpaper` (a Polymarket paper-trading harness). They share only
+the repo and the stdlib-only rule — do not couple them.
+
+## revops
+
 `revops` is a revenue tracker for Arjan's AI-content studio. It exists to
 answer: what earned, what didn't, and what's unlocked but unused.
 
@@ -46,3 +52,24 @@ python3 -m unittest discover -s tests -v   # tests
 ```
 
 Tests set `REVOPS_DB` to a temp path — never let a test touch `data/revops.db`.
+
+## pmpaper
+
+A paper-trading harness for Polymarket binaries (`src/pmpaper/`, docs in
+`docs/POLYMARKET.md`). Its purpose is to *refuse* to confirm edges that
+aren't there, so the conservative behaviour is the feature, not a bug.
+
+- **Costs are mandatory.** Spread, latency, and fees are all modelled. A
+  decision made on the book at time t fills against the book at t+latency;
+  an order landing after its window closes is not a fill. Never "simplify"
+  any of these away — each one alone makes a coin flip look profitable.
+- **Validate before trusting.** `python3 -m pmpaper validate` checks the
+  harness against a synthetic market with a known injected edge. It must
+  pass all five checks, including that it does NOT flag a real-but-small
+  edge as significant. If you change the fill model or stats, re-run it.
+- **Statistical tolerances, not flat ones.** Comparisons against theory use
+  a multiple-of-standard-error bound. An early version of the self-check
+  used a flat tolerance and failed on a correct implementation.
+- **Network is often blocked.** `feeds.py` splits `fetch_*` (IO) from
+  `parse_*` (pure) so parsers stay unit-testable without a live venue.
+  Tests must never hit the network.

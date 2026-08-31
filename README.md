@@ -129,6 +129,28 @@ until there's enough data to justify an opinion.
 
 ---
 
+## Also in this repo: pmpaper
+
+A separate, independent tool: a **paper-trading harness for Polymarket binary
+markets** (`src/pmpaper/`, docs in **[docs/POLYMARKET.md](docs/POLYMARKET.md)**).
+It answers whether a trading strategy has an edge that survives spread,
+latency and fees — before any money is risked.
+
+```bash
+PYTHONPATH=src python3 -m pmpaper validate    # prove the harness itself works
+PYTHONPATH=src python3 -m pmpaper probe       # can this machine reach the APIs?
+PYTHONPATH=src python3 -m pmpaper record --duration 3600
+PYTHONPATH=src python3 -m pmpaper replay 1 fair-value-arb --latency 150
+```
+
+It is validated against a synthetic market whose true edge is known by
+construction, so it can be checked for both false positives and false
+negatives. The headline finding: on 5-minute crypto binaries the edge is
+purely a latency race against the market maker, and it inverts the moment
+your latency exceeds theirs.
+
+---
+
 ## Layout
 
 ```
@@ -142,4 +164,7 @@ src/revops/
   cli.py           the interface
 docs/PLAYBOOK.md   the long-run strategy
 docs/SPRINT.md     the 7-day plan to a first paying client
+
+src/pmpaper/       independent: Polymarket paper-trading harness
+docs/POLYMARKET.md what it measures and what it found
 ```
