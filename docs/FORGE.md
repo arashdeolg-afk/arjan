@@ -49,9 +49,12 @@ While the project is running, `/proxy/<id>/…` forwards requests to
 `127.0.0.1:<port>` — so the preview pane shows the app your own process
 is serving, not static files. Absolute `Location:` redirects are
 rewritten to stay inside the proxy; until the server is up, the pane
-shows a waiting page that retries by itself. One rule for proxied apps:
-use **relative** URLs (`api/hello`, not `/api/hello`) in pages, since
-the app is mounted under `/proxy/<id>/`.
+shows a waiting page that retries by itself. **WebSockets pass through
+too**: after relaying the upgrade handshake the proxy splices bytes in
+both directions, so real-time apps (live dashboards, chat, multiplayer)
+work in the preview. One rule for proxied apps: use **relative** URLs
+(`api/hello`, not `/api/hello`) in pages, since the app is mounted
+under `/proxy/<id>/`.
 
 ## The AI pane (bring your own keys)
 
@@ -128,6 +131,6 @@ do that on networks you trust.
 - **Mobile:** the app is responsive and installable (PWA manifest +
   service worker) today; a dedicated mobile app can reuse the JSON+SSE
   API as-is.
-- Proxy: WebSocket passthrough for apps that use them.
 - Optional git integration on top of snapshots, for users who want
   real branches and remotes.
+- The dedicated mobile app (the JSON+SSE API is ready for it).

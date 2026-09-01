@@ -445,6 +445,78 @@ class TestProxy(ServerTest):
         status, _h, _raw = self.request("GET", "/proxy/no-such-project/")
         self.assertEqual(status, 404)
 
+    def _ws_backend(self, reply_head, echo=False):
+        import socket as sk
+        srv = sk.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+
+        def run():
+            conn, _addr = srv.accept()
+            head = b""
+            while b"\r\n\r\n" not in head:
+                head += conn.recv(4096)
+            conn.sendall(reply_head)
+            if echo:
+                data = conn.recv(4096)
+                conn.sendall(b"echo:" + data)
+            conn.close()
+
+        threading.Thread(target=run, daemon=True).start()
+        return srv, srv.getsockname()[1]
+
+    def _ws_request(self, pid):
+        import socket as sk
+        cli = sk.create_connection(("127.0.0.1", self.port), timeout=10)
+        cli.sendall((
+            f"GET /proxy/{pid}/ws HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.port}\r\n"
+            "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+            "Sec-WebSocket-Key: dGVzdC1rZXktMTIzNDU=\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = cli.recv(4096)
+            if not chunk:
+                break
+            head += chunk
+        return cli, head
+
+    def test_websocket_upgrade_is_spliced(self):
+        srv, ws_port = self._ws_backend(
+            b"HTTP/1.1 101 Switching Protocols\r\n"
+            b"Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n", echo=True)
+        try:
+            pid = self.make_project("WsApp", template="webapp")["id"]
+            self.json_request("PATCH", f"/api/projects/{pid}", {"port": ws_port})
+            cli, head = self._ws_request(pid)
+            try:
+                self.assertIn(b" 101 ", head.split(b"\r\n", 1)[0] + b" ")
+                cli.sendall(b"raw-bytes-through")
+                got = b""
+                while b"echo:raw-bytes-through" not in got:
+                    chunk = cli.recv(4096)
+                    if not chunk:
+                        break
+                    got += chunk
+                self.assertIn(b"echo:raw-bytes-through", got)
+            finally:
+                cli.close()
+        finally:
+            srv.close()
+
+    def test_websocket_decline_passes_status_through(self):
+        srv, ws_port = self._ws_backend(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+        try:
+            pid = self.make_project("WsNo", template="webapp")["id"]
+            self.json_request("PATCH", f"/api/projects/{pid}", {"port": ws_port})
+            cli, head = self._ws_request(pid)
+            cli.close()
+            self.assertIn(b" 403 ", head.split(b"\r\n", 1)[0] + b" ")
+        finally:
+            srv.close()
+
 
 class TestAiApi(ServerTest):
     def test_chat_requires_a_key(self):

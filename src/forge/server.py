@@ -17,7 +17,9 @@ import http.client
 import json
 import mimetypes
 import re
+import socket
 import sys
+import threading
 import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -287,6 +289,10 @@ class ForgeHandler(BaseHTTPRequestHandler):
         if rawquery:
             target += "?" + rawquery
 
+        if "upgrade" in (self.headers.get("Connection") or "").lower() and \
+                (self.headers.get("Upgrade") or "").lower() == "websocket":
+            return self._proxy_websocket(method, target, port)
+
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
             raise ApiError("request too large", 413)
@@ -323,6 +329,75 @@ class ForgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+
+    def _proxy_websocket(self, method: str, target: str, port: int) -> None:
+        """Relay a WebSocket upgrade, then splice bytes in both directions.
+
+        After the 101 handshake a WebSocket is just a byte stream, so no
+        frame parsing is needed — two pumps and the browser talks straight
+        to the user's app.
+        """
+        try:
+            backend = socket.create_connection(("127.0.0.1", port), timeout=10)
+        except OSError:
+            return self._proxy_wait("", port)
+
+        lines = [f"{method} {target} HTTP/1.1"]
+        for key, value in self.headers.items():
+            if key.lower() == "host":
+                value = f"127.0.0.1:{port}"
+            lines.append(f"{key}: {value}")
+        try:
+            backend.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 65536:
+                chunk = backend.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+            self.close_connection = True
+            if b" 101 " not in head.split(b"\r\n", 1)[0] + b" ":
+                # The app declined the upgrade — pass its answer through.
+                self.wfile.write(head)
+                backend.close()
+                return
+            self.wfile.write(head)  # includes any early frames after \r\n\r\n
+            self.wfile.flush()
+
+            backend.settimeout(None)
+            self.connection.settimeout(None)
+
+            def pump_client_to_backend():
+                try:
+                    while True:
+                        data = self.rfile.read1(4096)
+                        if not data:
+                            break
+                        backend.sendall(data)
+                except OSError:
+                    pass
+                try:
+                    backend.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+            pump = threading.Thread(target=pump_client_to_backend, daemon=True)
+            pump.start()
+            try:
+                while True:
+                    data = backend.recv(4096)
+                    if not data:
+                        break
+                    self.wfile.write(data)
+                    self.wfile.flush()
+            except OSError:
+                pass
+        finally:
+            try:
+                backend.close()
+            except OSError:
+                pass
 
     def _proxy_wait(self, pid: str, port: int) -> None:
         if port:
