@@ -8,7 +8,8 @@ venv/
 
 # Local data: your real numbers stay off GitHub
 data/*.db
-data/*.db-journal
+data/pmpaper.db
+data/pmpaper.db-journal
 data/*.sqlite3
 
 # Local data: forge projects and settings (API key!) stay off GitHub
