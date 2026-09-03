@@ -42,6 +42,14 @@ reorder those without re-reading the playbook's economics table.
   conversion silently inflates.
 - **Honest gating.** `MIN_SAMPLE = 3`. Below that, flag low confidence rather
   than presenting a confident-looking ranking.
+- **Snapshots are lifetime totals.** `analytics.LATEST_METRICS` reads the most
+  recent `metrics` row per post as that post's total and never sums snapshots.
+  Anything writing metrics must respect that — `ingest` refuses a file when
+  most rows come in below the stored figure, because that is what a daily
+  breakdown looks like and importing it silently re-ranks everything.
+- **Partial imports are worse than none.** `ingest` skips rows it cannot match
+  to a post and prints them with the command that fixes each one. Never add
+  fuzzy matching: attaching numbers to the wrong video is invisible downstream.
 
 ## Running things
 
