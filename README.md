@@ -1,5 +1,9 @@
 # revops — revenue operating system for an AI-content studio
 
+> **Also in this repo:** [Forge](docs/FORGE.md) — a self-hosted,
+> Replit-style builder for websites and apps. `PYTHONPATH=src python3 -m forge`
+> and open http://127.0.0.1:8484. Zero dependencies, like everything here.
+
 A local-first tracker that answers three questions honestly:
 
 1. **What did I make, and what did it cost me?** (credits *and* hours)

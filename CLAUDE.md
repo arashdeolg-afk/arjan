@@ -1,8 +1,17 @@
 # Working in this repo
 
-Two independent tools live here: `revops` (revenue tracking for the content
-studio) and `pmpaper` (a Polymarket paper-trading harness). They share only
-the repo and the stdlib-only rule — do not couple them.
+Three independent tools live here, all pure-stdlib Python 3.11. They share
+only the repo and the stdlib-only rule — do not couple them.
+
+- `src/revops` — revenue tracking for the content studio (below).
+- `src/forge` — a self-hosted Replit-style builder for websites and apps
+  (browser IDE, live preview, code runner, AI pane — Claude by default,
+  with OpenAI / Gemini / OpenAI-compatible providers). See
+  `docs/FORGE.md`. Its user data lives in `data/forge/` (gitignored);
+  every network-supplied file path must go through `Store.resolve` (the
+  path jail), and tests construct `Store(tmpdir)` so nothing touches
+  real data.
+- `src/pmpaper` — a Polymarket paper-trading harness (below).
 
 ## revops
 
