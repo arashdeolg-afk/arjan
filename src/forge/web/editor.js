@@ -315,6 +315,27 @@
       this._cursorMoved();
     }
 
+    /* Public editing commands — used by the keyboard shortcuts below and,
+     * on touch devices, by the toolbar row above the editor. Each focuses
+     * the textarea first so they work from button presses too. */
+    indent(dir) {
+      this.ta.focus();
+      const { selectionStart: s, selectionEnd: e } = this.ta;
+      const unit = this._indent;
+      if (dir < 0) {
+        this._replaceLines((line) =>
+          line.replace(new RegExp(`^ {1,${unit.length}}`), ""));
+      } else if (s !== e && this.ta.value.slice(s, e).includes("\n")) {
+        this._replaceLines((line) => unit + line);
+      } else {
+        this._insert(unit);
+      }
+    }
+
+    undo() { this.ta.focus(); document.execCommand("undo"); this._cursorMoved(); }
+    redo() { this.ta.focus(); document.execCommand("redo"); this._cursorMoved(); }
+    toggleComment() { this.ta.focus(); this._toggleComment(); }
+
     _keydown(e) {
       if (e.isComposing) return;
       const mod = e.metaKey || e.ctrlKey;
@@ -353,16 +374,7 @@
       }
       if (e.key === "Tab") {
         e.preventDefault();
-        if (s !== e2 && v.slice(s, e2).includes("\n")) {
-          const unit = this._indent;
-          this._replaceLines((line) =>
-            e.shiftKey ? line.replace(new RegExp(`^ {1,${unit.length}}`), "") : unit + line);
-        } else if (e.shiftKey) {
-          this._replaceLines((line) =>
-            line.replace(new RegExp(`^ {1,${this._indent.length}}`), ""));
-        } else {
-          this._insert(this._indent);
-        }
+        this.indent(e.shiftKey ? -1 : 1);
         return;
       }
       if (e.key === "Enter" && !mod) {

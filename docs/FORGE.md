@@ -126,11 +126,33 @@ model as an IDE terminal. It binds `127.0.0.1` by default; `--host
 0.0.0.0` exposes it to your network **with no authentication**, so only
 do that on networks you trust.
 
+## The mobile app
+
+Forge on a phone is the PWA, installed: open it in the phone's browser
+and use **Add to Home Screen** (Share sheet on iOS, install prompt on
+Android). What you get is deliberately app-like, not just a shrunk page:
+
+- **Real home-screen icons** — proper PNG icons (180px for iOS, 512px
+  maskable for Android) rendered from the same art as the in-app logo,
+  plus standalone display with a black-translucent iOS status bar.
+- **Offline-aware shell** — the service worker precaches the app shell
+  and falls back network-first, so the installed app opens instantly;
+  if the Forge server isn't reachable it shows a friendly page saying
+  how to start it instead of a browser error. Live endpoints (the API,
+  previews, the proxy, SSE) are never cached — stale data would be
+  worse than an error in a live-editing tool.
+- **Touch editing toolbar** — on coarse-pointer screens a strip above
+  the editor adds the keys a virtual keyboard is missing: indent,
+  outdent, undo, redo, toggle-comment, and find & replace. Buttons act
+  on `pointerdown` so the keyboard never closes while you use them.
+- **Pane switcher** — under 900px the workspace becomes single-pane
+  with a bottom Files / Code / Preview / AI nav (safe-area aware for
+  notched phones), and touch targets grow to finger size.
+
+The whole thing still speaks the same JSON+SSE API, so a future native
+client needs no server changes.
+
 ## Roadmap
 
-- **Mobile:** the app is responsive and installable (PWA manifest +
-  service worker) today; a dedicated mobile app can reuse the JSON+SSE
-  API as-is.
 - Optional git integration on top of snapshots, for users who want
   real branches and remotes.
-- The dedicated mobile app (the JSON+SSE API is ready for it).

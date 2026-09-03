@@ -485,6 +485,10 @@ svg { width: 16px; height: 16px; flex: none; }
 
 .mnav { display: none; }
 
+/* Touch editing toolbar: hidden unless the screen is narrow AND the primary
+ * pointer is a finger (so a narrow desktop window keeps its keyboard flow). */
+.etb { display: none; }
+
 @media (max-width: 900px) {
   .ws-body { grid-template-columns: 1fr; }
   .rz { display: none; }
@@ -504,4 +508,19 @@ svg { width: 16px; height: 16px; flex: none; }
   .ws-title { max-width: 40vw; }
   .ws-top .btn span { display: none; }
   .db-hero h1 br { display: none; }
+  /* Finger-sized targets */
+  .tree-item { min-height: 38px; }
+  .tab { min-height: 40px; }
+  .ws-top .btn, .side-tools .btn { min-width: 38px; min-height: 38px; }
+}
+
+@media (max-width: 900px) and (pointer: coarse) {
+  .etb { display: flex; flex: none; gap: 5px; padding: 5px 8px;
+    background: var(--bg1); border-bottom: 1px solid var(--border);
+    overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .etb button { flex: 1; min-width: 44px; min-height: 36px;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--dim); font: 600 15px/1 var(--mono); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .etb button:active { background: var(--bg4); color: var(--accent); }
 }

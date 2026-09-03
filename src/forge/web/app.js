@@ -704,6 +704,14 @@ async function renderWorkspace(pid) {
       <main class="ws-main" id="w-main">
         <div class="ed-area">
           <div class="tabs" id="w-tabs"><div class="tabs-status" id="w-status"></div></div>
+          <div class="etb" id="w-etb">
+            <button data-cmd="dedent" title="Outdent">⇤</button>
+            <button data-cmd="indent" title="Indent">⇥</button>
+            <button data-cmd="undo" title="Undo">↶</button>
+            <button data-cmd="redo" title="Redo">↷</button>
+            <button data-cmd="comment" title="Toggle comment">//</button>
+            <button data-cmd="find" title="Find &amp; replace">⌕</button>
+          </div>
           <div class="ed-host" id="w-edhost">
             <div class="ed-empty" id="w-edempty">
               <div>${I.logo}</div>
@@ -754,6 +762,22 @@ async function renderWorkspace(pid) {
 
   const treeEl = $("#w-tree"), tabsEl = $("#w-tabs"), hostEl = $("#w-edhost");
   const statusEl = $("#w-status"), cBody = $("#c-body"), cStatus = $("#c-status");
+
+  /* Touch editing toolbar (visible on coarse-pointer, narrow screens).
+   * Acts on pointerdown with preventDefault so the textarea keeps focus
+   * and the virtual keyboard stays open. */
+  $("#w-etb").addEventListener("pointerdown", (ev) => {
+    const btn = ev.target.closest("button[data-cmd]");
+    if (!btn) return;
+    ev.preventDefault();
+    const ed = ws.active?.ed;
+    if (!ed) return;
+    ({
+      indent: () => ed.indent(1), dedent: () => ed.indent(-1),
+      undo: () => ed.undo(), redo: () => ed.redo(),
+      comment: () => ed.toggleComment(), find: () => ed.openFind(),
+    })[btn.dataset.cmd]?.();
+  });
 
   /* ----- files & tabs ----- */
 

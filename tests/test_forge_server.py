@@ -275,6 +275,27 @@ class TestPreviewAndStatic(ServerTest):
         self.assertEqual(status, 200)
         self.assertIn("javascript", headers["Content-Type"])
 
+    def test_pwa_assets_served(self):
+        status, headers, raw = self.request("GET", "/manifest.webmanifest")
+        self.assertEqual(status, 200)
+        self.assertIn(b"icon-512.png", raw)
+
+        status, _h, raw = self.request("GET", "/sw.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"forge-shell", raw)
+        self.assertIn(b"offline.html", raw)
+
+        status, headers, raw = self.request("GET", "/offline.html")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Forge", raw)
+
+        # PNG icons, including the conventional iOS alias path.
+        for path in ("/icon-180.png", "/icon-512.png", "/apple-touch-icon.png"):
+            status, headers, raw = self.request("GET", path)
+            self.assertEqual(status, 200, path)
+            self.assertIn("image/png", headers["Content-Type"])
+            self.assertTrue(raw.startswith(b"\x89PNG\r\n\x1a\n"), path)
+
 
 class TestRunApi(ServerTest):
     def test_run_stream_and_exit(self):

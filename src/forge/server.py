@@ -228,10 +228,13 @@ class ForgeHandler(BaseHTTPRequestHandler):
             return self._file_from_web("live.js")
         if path.startswith("/assets/"):
             return self._file_from_web(path[len("/assets/"):])
-        if path in ("/manifest.webmanifest", "/sw.js", "/icon.svg"):
+        if path in ("/manifest.webmanifest", "/sw.js", "/icon.svg",
+                    "/icon-180.png", "/icon-512.png", "/offline.html"):
             return self._file_from_web(path.lstrip("/"))
         if path in ("/favicon.ico", "/favicon.svg"):
             return self._file_from_web("icon.svg")
+        if path == "/apple-touch-icon.png":  # iOS requests this by convention
+            return self._file_from_web("icon-180.png")
         # Anything else is an app route: serve the single-page app.
         self._file_from_web("index.html")
 
