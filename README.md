@@ -74,8 +74,12 @@ revops new "Cat vs Roomba ep.12" --topic anime-comedy \
 # 2. Log where it went (marketing-head handles the actual posting)
 revops post cat-vs-roomba-ep-12 tiktok youtube instagram x
 
-# 3. A week later, snapshot how it did
+# 3. A week later, snapshot how it did — one post at a time...
 revops track cat-vs-roomba-ep-12 tiktok --views 12400 --likes 890 --clicks 41
+
+#    ...or the whole week's numbers in one go, straight from a platform export
+revops ingest ~/Downloads/yt.csv --platform youtube --dry-run   # look first
+revops ingest ~/Downloads/yt.csv --platform youtube
 
 # 4. Log money in and out
 revops earn client_ugc 300 --notes "spot for indie game studio"
@@ -102,6 +106,7 @@ alias revops='PYTHONPATH=/home/user/arjan/src python3 -m revops'
 | `new` | Log a piece of content, with its cost in money and time |
 | `post` | Record that it went live on one or more platforms |
 | `track` | Snapshot performance (append-only — history is kept) |
+| `ingest` | Bulk-load a platform export (CSV/JSON); reports what it couldn't match rather than guessing |
 | `earn` / `spend` | Money in / money out |
 | `streams` | Which revenue streams are unlocked, and what's blocking the rest |
 | `report --days N` | Full analysis: P&L, platforms, topics, hooks, actions |

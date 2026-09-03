@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 
 from . import analytics as A
 from . import ledger as L
@@ -168,6 +169,72 @@ def cmd_today(conn, a) -> None:
         _rule("ACTIONS")
         for r in recs:
             print(f"  • {r}")
+    print()
+
+
+def cmd_ingest(conn, a) -> None:
+    """Bulk-load a platform export. Reports what it could not match."""
+    from . import ingest as I
+
+    overrides = {}
+    for pair in a.map or []:
+        if "=" not in pair:
+            raise ValueError(f"--map needs COLUMN=field, got {pair!r}")
+        column, field = pair.split("=", 1)
+        field = field.strip()
+        if field not in I.METRIC_FIELDS + I.IDENTITY_FIELDS:
+            raise ValueError(
+                f"unknown field {field!r} — pick from "
+                f"{', '.join(I.METRIC_FIELDS + I.IDENTITY_FIELDS)}"
+            )
+        overrides[column.strip()] = field
+
+    try:
+        r = I.ingest_file(
+            conn, a.path, a.platform, captured_at=a.captured_at,
+            dry_run=a.dry_run, force=a.force, overrides=overrides,
+        )
+    except I.IngestError as exc:
+        raise ValueError(str(exc)) from exc
+
+    _rule(f"INGEST — {a.platform.lower()} — {r['rows_read']} rows read")
+
+    if r["aborted"]:
+        print("  \033[31mrefused\033[0m — nothing written.\n")
+        for line in textwrap.wrap(r["abort_reason"], 64):
+            print(f"  {line}")
+        for g in r["regressions"][:5]:
+            print(f"    {g['label'][:44]:<46}{g['was']:>10,} -> {g['now']:>10,}")
+        print()
+        return
+
+    verb = "would write" if a.dry_run else "wrote"
+    print(f"  {verb:<14}{len(r['write']):>5} snapshots at {r['captured_at']}")
+    if r["duplicates"]:
+        print(f"  {'skipped':<14}{len(r['duplicates']):>5} already imported at this timestamp")
+
+    if r["regressions"]:
+        _rule("VIEWS WENT DOWN")
+        print("  Lifetime totals should only rise. Check these are not a daily export.")
+        for g in r["regressions"][:10]:
+            print(f"  {g['label'][:44]:<46}{g['was']:>10,} -> {g['now']:>10,}")
+
+    if r["unmatched"]:
+        _rule(f"UNMATCHED — {len(r['unmatched'])} rows NOT imported")
+        print("  These rows name something this database does not know about.")
+        print("  Left alone they would silently bias every ranking, so they are skipped.\n")
+        for u in r["unmatched"][:15]:
+            print(f"  \033[33m{u['label'][:56]}\033[0m")
+            print(f"      {u['reason']}")
+            print(f"      fix: {I.fix_command(u, a.platform)}")
+        if len(r["unmatched"]) > 15:
+            print(f"\n  ...and {len(r['unmatched']) - 15} more.")
+        print("\n  Tip: add a 'slug' column to the export for exact matching.")
+
+    if a.dry_run:
+        print("\n  Dry run — nothing written. Re-run without --dry-run to commit.")
+    elif r["written"]:
+        print(f"\n  Next: python3 -m revops report")
     print()
 
 
@@ -387,6 +454,23 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("report", help="full performance analysis")
     r.add_argument("--days", type=int, default=30)
     r.set_defaults(fn=cmd_report)
+
+    ing = sub.add_parser(
+        "ingest",
+        help="bulk-load metrics from a platform export (CSV/JSON, or - for stdin)",
+    )
+    ing.add_argument("path", help="export file, or '-' to read stdin")
+    ing.add_argument("--platform", required=True,
+                     help="which platform this export came from")
+    ing.add_argument("--captured-at", dest="captured_at",
+                     help="ISO timestamp for the snapshot (default: now)")
+    ing.add_argument("--dry-run", action="store_true",
+                     help="show what would happen without writing")
+    ing.add_argument("--force", action="store_true",
+                     help="import even if the numbers look like daily deltas")
+    ing.add_argument("--map", action="append", metavar="COLUMN=field",
+                     help="map an unrecognised column, e.g. --map 'Plays=views'")
+    ing.set_defaults(fn=cmd_ingest)
 
     d = sub.add_parser("dash", help="write an HTML dashboard")
     d.add_argument("--days", type=int, default=30)

@@ -95,6 +95,39 @@ def add_post(
     return int(row["id"])
 
 
+def add_metrics_for_post(
+    conn: sqlite3.Connection,
+    post_id: int,
+    *,
+    views: int = 0,
+    likes: int = 0,
+    comments: int = 0,
+    shares: int = 0,
+    followers_gained: int = 0,
+    watch_time_s: float = 0.0,
+    clicks: int = 0,
+    captured_at: str | None = None,
+    commit: bool = True,
+) -> int:
+    """Append a snapshot against a post that has already been resolved.
+
+    Bulk importers hold the post id already and would otherwise pay a
+    lookup — and a commit — per row. `commit=False` lets a whole export
+    land as one transaction.
+    """
+    cur = conn.execute(
+        """INSERT INTO metrics
+           (post_id, captured_at, views, likes, comments, shares,
+            followers_gained, watch_time_s, clicks)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (post_id, captured_at or now(), views, likes, comments, shares,
+         followers_gained, watch_time_s, clicks),
+    )
+    if commit:
+        conn.commit()
+    return int(cur.lastrowid)
+
+
 def add_metrics(
     conn: sqlite3.Connection,
     content_ref: str | int,
@@ -117,16 +150,11 @@ def add_metrics(
         raise LookupError(
             f"content {content_ref!r} was never posted to {platform!r} — run `post` first"
         )
-    cur = conn.execute(
-        """INSERT INTO metrics
-           (post_id, captured_at, views, likes, comments, shares,
-            followers_gained, watch_time_s, clicks)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (row["id"], captured_at or now(), views, likes, comments, shares,
-         followers_gained, watch_time_s, clicks),
+    return add_metrics_for_post(
+        conn, int(row["id"]), views=views, likes=likes, comments=comments,
+        shares=shares, followers_gained=followers_gained,
+        watch_time_s=watch_time_s, clicks=clicks, captured_at=captured_at,
     )
-    conn.commit()
-    return int(cur.lastrowid)
 
 
 def add_revenue(
