@@ -15,6 +15,15 @@ that first. The short version: *sell the capability, not the content.*
 
 ---
 
+## Also in this repo: Jedar AI
+
+`jedar/` holds an independent project: **Jedar AI**, a voice-first faith-guidance
+companion (Expo SDK 57 mobile app + Express/TypeScript server using the OpenAI
+Realtime and Responses APIs). It shares nothing with revops or pmpaper. See
+[jedar/README.md](jedar/README.md).
+
+---
+
 ## Quick start
 
 ```bash
