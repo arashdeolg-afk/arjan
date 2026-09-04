@@ -1,8 +1,10 @@
 # Working in this repo
 
-Two independent tools live here: `revops` (revenue tracking for the content
-studio) and `pmpaper` (a Polymarket paper-trading harness). They share only
-the repo and the stdlib-only rule — do not couple them.
+Three independent projects live here: `revops` (revenue tracking for the content
+studio), `pmpaper` (a Polymarket paper-trading harness), and `jedar/` (Jedar AI,
+a TypeScript mobile app + server). revops and pmpaper share the stdlib-only
+rule; `jedar/` is a separate Node/Expo workspace with its own README. Do not
+couple any of them.
 
 ## revops
 
@@ -73,3 +75,22 @@ aren't there, so the conservative behaviour is the feature, not a bug.
 - **Network is often blocked.** `feeds.py` splits `fetch_*` (IO) from
   `parse_*` (pure) so parsers stay unit-testable without a live venue.
   Tests must never hit the network.
+
+## jedar
+
+`jedar/` is Jedar AI: an Expo SDK 57 + Expo Router mobile app (`jedar/mobile`)
+and an Express/TypeScript server (`jedar/server`). Read `jedar/README.md` and
+`jedar/CONTENT_REVIEW.md` before changing it.
+
+- **Keys stay on the server.** Never put `OPENAI_API_KEY` in `jedar/mobile`,
+  `app.json`, or any `EXPO_PUBLIC_*` variable.
+- **Curated content only.** Daily reflections come from
+  `jedar/server/content/reflections.json`. Unapproved records are always
+  labelled Reflection; scripture needs `approved`, `sourceName`, `reference`,
+  and `reviewedBy` or the server refuses to start. Never add invented verses.
+- **One instruction builder.** `jedar/server/src/instructions.ts` is the only
+  place Jedar's system instructions are written; clients send IDs, not prompts.
+- **Nothing is stored automatically.** No transcript or journal text reaches
+  the server or logs; journal data is on-device SQLite.
+- Run `cd jedar && npm run typecheck && npm test`. Mobile tests use
+  `node:sqlite` (Node 22.13+) and never need a device.
