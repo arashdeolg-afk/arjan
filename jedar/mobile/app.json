@@ -13,12 +13,19 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Jedar listens only while you are in a voice conversation you started.",
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
       "package": "ai.jedar.app",
-      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.MODIFY_AUDIO_SETTINGS", "android.permission.POST_NOTIFICATIONS", "android.permission.SCHEDULE_EXACT_ALARM"]
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -26,11 +33,17 @@
       "expo-sqlite",
       [
         "expo-splash-screen",
-        { "backgroundColor": "#0F1217" }
+        {
+          "backgroundColor": "#0F1217"
+        }
       ],
+      "./plugins/withoutPushEntitlement.js",
       [
         "expo-notifications",
-        { "color": "#D8B570", "defaultChannel": "daily-reflection" }
+        {
+          "color": "#D8B570",
+          "defaultChannel": "daily-reflection"
+        }
       ],
       [
         "@config-plugins/react-native-webrtc",

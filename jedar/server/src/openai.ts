@@ -59,7 +59,6 @@ export class OpenAIClient implements OpenAIGateway {
         },
         output: { voice: config.voice },
       },
-      safety_identifier: safetyIdentifier,
     };
     const form = new FormData();
     form.set("sdp", offerSdp);
@@ -72,7 +71,9 @@ export class OpenAIClient implements OpenAIGateway {
     });
     const requestId = res.headers.get("x-request-id");
     const callId = res.headers.get("location");
-    log.info("openai.realtime.call", { status: res.status, requestId, callId, model: config.model });
+    // The Realtime session object has no safety_identifier field, so the hashed
+    // identifier is kept in our own logs for abuse tracing instead of being sent.
+    log.info("openai.realtime.call", { status: res.status, requestId, callId, model: config.model, safetyIdentifier });
     const body = await res.text();
     if (!res.ok) {
       log.error("openai.realtime.error", { status: res.status, requestId, body: body.slice(0, 300) });

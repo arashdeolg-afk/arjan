@@ -131,9 +131,10 @@ ignored, so a client cannot smuggle `instructions`.
 `server/src/openai.ts` posts a `multipart/form-data` body with `sdp` and a `session` JSON
 object to `POST {OPENAI_BASE_URL}/realtime/calls`. The session config sets the model, the full
 Jedar instructions, `output_modalities: ["audio"]`, input transcription with
-`OPENAI_TRANSCRIPTION_MODEL`, semantic voice-activity detection with interruption enabled, the
-mapped OpenAI voice, and a `safety_identifier`. The answer SDP is returned to the app. The
-`x-request-id` and `Location` (call ID) headers are logged; content is not.
+`OPENAI_TRANSCRIPTION_MODEL`, semantic voice-activity detection with interruption enabled, and
+the mapped OpenAI voice. The answer SDP is returned to the app. The `x-request-id` and
+`Location` (call ID) headers plus the hashed safety identifier are logged; content is not.
+(The Realtime session object has no `safety_identifier` field; the text path sends one.)
 
 ### Voices
 
@@ -247,8 +248,26 @@ conversation continues if the screen locks.
    whether voice is configured.
 7. iOS: the first **Start talking** shows the microphone prompt. Android 13+: the reminder
    toggle shows the notification prompt after the in-app explanation.
-8. Android cleartext HTTP to a LAN IP works in development builds. For a production build use
-   HTTPS (see deployment) or add a network-security config.
+8. Plain `http://` to a LAN IP works in development builds on both platforms (the generated
+   iOS project sets `NSAllowsLocalNetworking`). For a production build use HTTPS (see
+   deployment).
+
+### iPhone specifics
+
+- Any Apple ID works for a development build. `mobile/plugins/withoutPushEntitlement.js`
+  strips the remote-push entitlement that expo-notifications adds, because that capability
+  is unavailable on free personal teams and Jedar only uses local notifications. With a free
+  team the install expires after 7 days; rebuild to renew.
+- First run of `npx expo run:ios --device` stops at "requires a development team": open
+  `ios/JedarAI.xcworkspace` in Xcode, select the JedarAI target → Signing & Capabilities →
+  choose your Team, then run the command again.
+- On the phone: enable Developer Mode (Settings → Privacy & Security → Developer Mode,
+  iOS 16+), and after the first install trust the developer certificate under Settings →
+  General → VPN & Device Management.
+- Expect two system prompts on first launch: Local Network (so the app can reach Metro and
+  the Jedar server on your Wi-Fi) and Microphone (on first **Start talking**).
+- Remote audio plays through the default route, which may be the earpiece; hold the phone to
+  your ear or see Known limitations for loudspeaker output.
 
 ## Backend deployment
 
@@ -353,7 +372,7 @@ See [`CONTENT_REVIEW.md`](./CONTENT_REVIEW.md). Summary of enforced rules:
 | Voice audio | Streams to OpenAI via WebRTC during a session | Yes, during the session only; the Jedar server never sees audio |
 | Voice transcripts | In memory on the device | Not stored anywhere unless the user chooses "Save conversation to journal" |
 | Text composer messages and last 20 turns | Sent to the Jedar server, forwarded to OpenAI with `store: false` | Yes, not persisted by the server |
-| Install ID | Random UUID on the device | Sent as a header; the server hashes it with `SAFETY_ID_SALT` before OpenAI sees a derived value |
+| Install ID | Random UUID on the device | Sent as a header; the server hashes it with `SAFETY_ID_SALT`. The hash goes to OpenAI as `safety_identifier` on text requests and only to server logs for voice sessions |
 
 ## Production safety and privacy checklist
 
@@ -436,6 +455,8 @@ jedar/
     ├── app.json                      # Expo config + plugins (router, notifications, sqlite, splash, webrtc)
     ├── package.json
     ├── tsconfig.json
+    ├── plugins/
+    │   └── withoutPushEntitlement.js # drops the remote-push entitlement (local notifications only)
     ├── app/                          # Expo Router
     │   ├── _layout.tsx               # providers, notification tap routing, root stack
     │   ├── index.tsx                 # redirect: onboarding or Today
