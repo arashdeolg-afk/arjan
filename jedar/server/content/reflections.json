@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "note": "Curated daily content for Jedar AI. Every item here is an ORIGINAL reflection written for this app. None of it is scripture, and none of it quotes or paraphrases sacred text. Scripture records (type: \"scripture\") may only be added after review by a qualified representative of that faith, with approved: true, sourceName, reference, and reviewedBy filled in. See CONTENT_REVIEW.md.",
+  "items": [
+    {
+      "id": "sikh-001",
+      "faith": "sikh",
+      "type": "reflection",
+      "title": "Rising in good spirits",
+      "body": "Chardi kala is often described as a rising, steady spirit that stays hopeful even on hard days. It is not pretending everything is fine. It is choosing to face the day with courage and trust, one small step at a time.",
+      "approved": false
+    },
+    {
+      "id": "sikh-002",
+      "faith": "sikh",
+      "type": "reflection",
+      "title": "Quiet service",
+      "body": "Seva is service offered without expecting anything back. Today, consider one small act of care you could do that no one would ever need to notice. Notice how it feels to give without keeping score.",
+      "approved": false
+    },
+    {
+      "id": "sikh-003",
+      "faith": "sikh",
+      "type": "reflection",
+      "title": "Remembering through the day",
+      "body": "Many Sikhs speak of remembrance as something carried through ordinary moments, not only in set times of prayer. What might it look like to bring a quiet awareness of the Divine into one routine task today?",
+      "approved": false
+    },
+    {
+      "id": "sikh-004",
+      "faith": "sikh",
+      "type": "reflection",
+      "title": "Honest work, open hands",
+      "body": "Earning honestly and sharing with others are values many Sikhs hold close. Reflect on where your effort goes this week, and whether there is a way to make it a little more truthful, or a little more generous.",
+      "approved": false
+    },
+    {
+      "id": "muslim-001",
+      "faith": "muslim",
+      "type": "reflection",
+      "title": "Patience as a practice",
+      "body": "Sabr is often understood as patient endurance held together with trust. It does not mean feeling nothing. It means staying steady while feelings pass through. What is one situation where you could offer yourself a little more patience today?",
+      "approved": false
+    },
+    {
+      "id": "muslim-002",
+      "faith": "muslim",
+      "type": "reflection",
+      "title": "Counting what is good",
+      "body": "Gratitude, shukr, grows when it is noticed on purpose. Before the day fills up, name three ordinary things you are thankful for. Small thanks, offered sincerely, can soften a heavy heart.",
+      "approved": false
+    },
+    {
+      "id": "muslim-003",
+      "faith": "muslim",
+      "type": "reflection",
+      "title": "Returning to the pause",
+      "body": "The rhythm of daily prayer offers built-in moments to stop and return. Even between those times, a single mindful breath can be a way of turning back toward what matters. Where in your day could a pause fit?",
+      "approved": false
+    },
+    {
+      "id": "muslim-004",
+      "faith": "muslim",
+      "type": "reflection",
+      "title": "Mercy begins nearby",
+      "body": "Mercy toward others often starts with the people closest to us and with ourselves. Think of one person who might need gentleness from you today. Consider whether you also need some of that gentleness.",
+      "approved": false
+    },
+    {
+      "id": "christian-001",
+      "faith": "christian",
+      "type": "reflection",
+      "title": "Grace for this morning",
+      "body": "Many Christians describe grace as a kindness that is given rather than earned. Today, notice where you are trying hard to earn what may already be freely offered. What would it feel like to simply receive it?",
+      "approved": false
+    },
+    {
+      "id": "christian-002",
+      "faith": "christian",
+      "type": "reflection",
+      "title": "A small forgiveness",
+      "body": "Forgiveness is rarely a single moment. It is often a direction we keep choosing. Is there one small resentment you could loosen your grip on today, not because it was fine, but because you want to be free of carrying it?",
+      "approved": false
+    },
+    {
+      "id": "christian-003",
+      "faith": "christian",
+      "type": "reflection",
+      "title": "Prayer without polish",
+      "body": "Prayer does not need perfect words. Many people find that honest, unfinished sentences are enough. Try telling God, in plain language, what is actually on your mind right now.",
+      "approved": false
+    },
+    {
+      "id": "christian-004",
+      "faith": "christian",
+      "type": "reflection",
+      "title": "Hope that walks slowly",
+      "body": "Hope is sometimes loud, but more often it is quiet and persistent. Where in your life is hope asking you to keep walking, even without seeing the whole path?",
+      "approved": false
+    },
+    {
+      "id": "hindu-001",
+      "faith": "hindu",
+      "type": "reflection",
+      "title": "Doing what is yours to do",
+      "body": "Dharma is often understood as the right action for your place and moment, done with care. Today, consider one responsibility that is genuinely yours. What would it look like to do it fully, without clinging to how it turns out?",
+      "approved": false
+    },
+    {
+      "id": "hindu-002",
+      "faith": "hindu",
+      "type": "reflection",
+      "title": "Gentleness as strength",
+      "body": "Ahimsa, non-harm, includes the words we use with ourselves. Notice the tone of your inner voice this morning. Could you speak to yourself the way you would to a dear friend?",
+      "approved": false
+    },
+    {
+      "id": "hindu-003",
+      "faith": "hindu",
+      "type": "reflection",
+      "title": "Devotion in the ordinary",
+      "body": "Across many Hindu traditions, devotion can be expressed through simple, everyday acts offered with love. Choose one ordinary task today and do it as an offering rather than a chore.",
+      "approved": false
+    },
+    {
+      "id": "hindu-004",
+      "faith": "hindu",
+      "type": "reflection",
+      "title": "Turning inward",
+      "body": "Self-knowledge begins with honest attention. Take a few quiet breaths and simply notice what is present in you right now, without judging it. What do you find when you look kindly?",
+      "approved": false
+    },
+    {
+      "id": "jewish-001",
+      "faith": "jewish",
+      "type": "reflection",
+      "title": "Repairing one corner",
+      "body": "The idea of tikkun olam, repairing the world, can feel enormous. It becomes possible when it is small. What is one corner of your world, a relationship, a habit, a room, that you could help mend today?",
+      "approved": false
+    },
+    {
+      "id": "jewish-002",
+      "faith": "jewish",
+      "type": "reflection",
+      "title": "Learning as a way of loving",
+      "body": "Many Jewish communities treat learning as a form of devotion and belonging. Is there a question you have been carrying that deserves some real attention this week, perhaps with a teacher or a friend?",
+      "approved": false
+    },
+    {
+      "id": "jewish-003",
+      "faith": "jewish",
+      "type": "reflection",
+      "title": "Turning back",
+      "body": "Teshuvah is often described as turning and returning, coming back to who you meant to be. It is not about shame. It is about direction. Is there a small turn you could make today?",
+      "approved": false
+    },
+    {
+      "id": "jewish-004",
+      "faith": "jewish",
+      "type": "reflection",
+      "title": "Kindness that shows up",
+      "body": "Chesed, loving-kindness, is practical. It shows up with a meal, a visit, a phone call. Who in your community might be quietly hoping someone remembers them today?",
+      "approved": false
+    }
+  ]
+}

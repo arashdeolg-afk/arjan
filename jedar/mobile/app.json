@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "Jedar AI",
+    "slug": "jedar-ai",
+    "version": "0.1.0",
+    "scheme": "jedar",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F1217",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "ai.jedar.app",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Jedar listens only while you are in a voice conversation you started.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
+    },
+    "android": {
+      "package": "ai.jedar.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-sqlite",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0F1217"
+        }
+      ],
+      "./plugins/withoutPushEntitlement.js",
+      [
+        "expo-notifications",
+        {
+          "color": "#D8B570",
+          "defaultChannel": "daily-reflection"
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Jedar does not use the camera.",
+          "microphonePermission": "Jedar listens only while you are in a voice conversation you started."
+        }
+      ]
+    ]
+  }
+}
