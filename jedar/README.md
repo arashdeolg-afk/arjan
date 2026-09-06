@@ -221,14 +221,20 @@ npx expo run:android --device     # needs Android Studio / SDK, USB debugging en
 npx expo start --dev-client       # afterwards, start Metro for the installed dev client
 ```
 
-Or with EAS Build (cloud):
+Or with EAS Build (cloud, needs a paid Apple Developer account; no Xcode required):
 
 ```bash
 npm i -g eas-cli
-eas login
-eas build:configure
-eas build --profile development --platform ios     # or android
+eas login                                            # your Expo account (free)
+cd mobile
+eas init                                             # links the project, writes extra.eas.projectId
+eas device:create                                    # register your iPhone via the QR code it shows
+eas build --profile development --platform ios       # log in to Apple when prompted; EAS creates certs
 ```
+
+When the build finishes, open the link EAS prints on the phone to install, then run
+`npx expo start --dev-client` on your Mac and open the app. `mobile/eas.json` already defines
+the `development`, `preview`, and `production` profiles.
 
 The config plugin adds `NSMicrophoneUsageDescription` on iOS and `RECORD_AUDIO` /
 `MODIFY_AUDIO_SETTINGS` on Android. iOS also lists `audio` in `UIBackgroundModes` so a
