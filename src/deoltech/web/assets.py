@@ -362,6 +362,7 @@ hr { border: none; border-top: 1px solid var(--border-soft); margin: 1rem 0; }
 .log-pre    { font-size: .72rem; margin: 0; white-space: pre-wrap; }
 .note-flat  { font-size: .85rem; margin: 0; }
 .role-tag   { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; }
+.error-page main { max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; }
 .toast-host { position: fixed; bottom: 1rem; right: 1rem; z-index: 100;
               display: flex; flex-direction: column; gap: .5rem; max-width: 340px; }
 

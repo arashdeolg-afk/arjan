@@ -26,9 +26,9 @@ from __future__ import annotations
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-from ..clock import is_rollover_time, session_close, session_for, swap_multiplier, to_et
+from ..clock import ET, session_close, session_for, swap_multiplier, to_et
 from ..feeds.base import Feed, FeedError
 from ..instruments import Instrument, resolve
 from ..portfolio import Portfolio, round_money
@@ -71,17 +71,24 @@ class PaperBroker:
                  slippage: SlippageModel | None = None,
                  auto_liquidate: bool = True,
                  journal_limit: int = 20_000,
-                 clock=None):
+                 clock=None, defer_matching: bool = False):
         # Every time decision goes through `self.clock`, never straight to the
         # wall clock. The backtester points it at the bar being processed, so a
         # DAY order placed on a 2019 bar expires at that bar's session close
         # rather than instantly against today's date.
         self.clock = clock or utcnow
+        # When set, submit() accepts and risk-checks an order but never tries
+        # to fill it on the spot. The backtester needs this: it drives fills
+        # from the NEXT bar, and an immediate match against the portfolio mark
+        # would fill a signal at the very close it was computed from — the
+        # exact lookahead the whole engine exists to prevent.
+        self.defer_matching = defer_matching
         self.portfolio = portfolio or Portfolio()
         self.feed = feed
         self.fees = fee_schedule or FeeSchedule()
         self.risk = RiskEngine(risk_limits or RiskLimits())
-        self.matcher = Matcher(slippage or SlippageModel(), fee_fn=self._fee_fn)
+        self.matcher = Matcher(slippage or SlippageModel(), fee_fn=self._fee_fn,
+                               fx_rate_fn=self.portfolio.fx_rate)
         self.auto_liquidate = auto_liquidate
 
         self.orders: dict[str, Order] = {}
@@ -145,6 +152,8 @@ class PaperBroker:
             day_trades_5d=self.day_trade_count(),
             realized_today=self.portfolio.realized_pnl,
             start_of_day_equity=self._start_of_day_equity,
+            opened_today=frozenset(
+                s for s, q in self._opened_today.items() if abs(q) > 1e-12),
         )
 
     # ----------------------------------------------------------------- submit
@@ -152,6 +161,9 @@ class PaperBroker:
     def submit(self, order: Order, quote: Quote | None = None) -> Order:
         """Risk-check, accept, and attempt an immediate execution."""
         with self._lock:
+            # Stamp from the broker's clock, not the wall clock the dataclass
+            # defaulted to: in a backtest that is the bar being processed.
+            order.created_at = order.updated_at = self.clock()
             self.orders[order.id] = order
             self._log("submit", order,
                       f"{order.side.value} {order.qty} {order.symbol} "
@@ -160,6 +172,11 @@ class PaperBroker:
             inst = resolve(order.symbol)
             q = quote or self._quote(order.symbol)
             last = q.last if q else 0.0
+            if q is not None and q.last > 0:
+                # The freshest price there is: every figure the risk check
+                # reads — equity, buying power, the JPY rate for a USD/JPY
+                # ticket — should be measured against it, not a stale mark.
+                self.portfolio.mark({inst.symbol: q.last})
 
             decision = self.risk.check(order, self.portfolio, self.risk_state(),
                                        last, self.clock())
@@ -185,6 +202,8 @@ class PaperBroker:
                 self._oco[order.oco_group].add(order.id)
             self._log("accept", order, "working")
 
+            if self.defer_matching:
+                return order          # the driver will match it on the next bar
             if q is not None:
                 self._try_match(order, inst, q)
             self._enforce_tif(order, immediate=True)
@@ -339,10 +358,8 @@ class PaperBroker:
         now = self.clock()
         if order.tif is TimeInForce.IOC and immediate:
             if order.remaining > 1e-12:
-                self._finish(
-                    order,
-                    OrderStatus.CANCELED if order.filled_qty > 0 else OrderStatus.CANCELED,
-                    "immediate-or-cancel: remainder cancelled")
+                self._finish(order, OrderStatus.CANCELED,
+                             "immediate-or-cancel: remainder cancelled")
             return
         if order.tif is TimeInForce.FOK and immediate and order.filled_qty <= 0:
             self._finish(order, OrderStatus.CANCELED,
@@ -402,18 +419,58 @@ class PaperBroker:
             self._start_of_day_equity = self.portfolio.equity()
             self._opened_today.clear()
 
-    def _accrue_financing(self, now: datetime | None = None) -> None:
-        """Charge FX swap and short borrow once per day."""
-        now = now or self.clock()
-        today = to_et(now).date()
-        if self._last_financing == today:
-            return
-        if not (is_rollover_time(now) or self._last_financing is None):
-            # Outside the roll window and already initialized: nothing to do.
-            if self._last_financing is not None:
-                return
-        self._last_financing = today
+    def _last_roll_at(self, now: datetime) -> date:
+        """The most recent 17:00 ET roll at or before `now`."""
+        et = to_et(now)
+        d = et.date()
+        if et.time() < time(17, 0):
+            d -= timedelta(days=1)
+        return d
 
+    def _financing_baseline(self) -> date | None:
+        """Where to resume financing from after a restart.
+
+        The ledger is the record: the last swap or borrow line says which roll
+        was charged. With no such line, the earliest open position's opening
+        time bounds it — nothing before that could have accrued. Deriving the
+        baseline this way means a restart neither re-charges a day already
+        charged nor skips one the process was down for.
+        """
+        charged = [e.ts for e in self.portfolio.ledger if e.kind in ("swap", "borrow")]
+        if charged:
+            return self._last_roll_at(max(charged))
+        opened = [p.opened_at for p in self.portfolio.open_positions() if p.opened_at]
+        if opened:
+            return self._last_roll_at(min(opened))
+        return None
+
+    def _accrue_financing(self, now: datetime | None = None) -> None:
+        """Charge FX swap and short borrow for every roll that has passed.
+
+        A roll happens once a day at 17:00 ET. Rather than hoping a tick lands
+        inside that one minute — it rarely did, so most days went uncharged —
+        this compares the last roll charged with the last roll that has
+        occurred and settles each one in between. The Wednesday swap carries
+        the weekend and Friday's borrow does likewise, so Saturday and Sunday
+        are not roll dates.
+        """
+        now = now or self.clock()
+        latest = self._last_roll_at(now)
+        if self._last_financing is None:
+            self._last_financing = self._financing_baseline() or latest
+        if latest <= self._last_financing:
+            return
+        d = self._last_financing
+        while d < latest:
+            d += timedelta(days=1)
+            if d.weekday() >= 5:
+                continue
+            self._charge_roll(datetime.combine(d, time(17, 0), ET))
+        self._last_financing = latest
+
+    def _charge_roll(self, roll_at: datetime) -> None:
+        """Settle one day's financing against every open position."""
+        borrow_days = 3.0 if roll_at.weekday() == 4 else 1.0   # Friday covers the weekend
         for pos in self.portfolio.open_positions():
             inst = resolve(pos.symbol)
             px = self.portfolio.price_of(pos.symbol) or pos.avg_price
@@ -421,15 +478,15 @@ class PaperBroker:
                 continue
             if inst.asset_class is AssetClass.FX:
                 rate = self.portfolio.fx_rate(inst.quote_ccy)
-                fee = swap_charge(inst, pos.qty, px, swap_multiplier(now), rate)
+                fee = swap_charge(inst, pos.qty, px, swap_multiplier(roll_at), rate)
                 if abs(fee.swap) > 1e-9:
-                    self.portfolio.accrue(fee.swap, "swap", pos.symbol, now)
+                    self.portfolio.accrue(fee.swap, "swap", pos.symbol, roll_at)
                     self._log("swap", None, f"{pos.symbol} swap {fee.swap:+.4f}",
                               symbol=pos.symbol, amount=fee.swap)
             elif pos.is_short:
-                fee = borrow_charge(inst, pos.qty, px, 1.0, self.fees)
+                fee = borrow_charge(inst, pos.qty, px, borrow_days, self.fees)
                 if abs(fee.borrow) > 1e-9:
-                    self.portfolio.accrue(fee.borrow, "borrow", pos.symbol, now)
+                    self.portfolio.accrue(fee.borrow, "borrow", pos.symbol, roll_at)
                     self._log("borrow", None,
                               f"{pos.symbol} borrow {fee.borrow:+.4f}",
                               symbol=pos.symbol, amount=fee.borrow)

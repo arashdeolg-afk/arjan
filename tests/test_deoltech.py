@@ -784,10 +784,23 @@ class TestRisk(unittest.TestCase):
         decision = self.check(Order("AAPL", Side.BUY, 1, reduce_only=True), 200.0)
         self.assertEqual(decision.code, "reduce_only_no_position")
 
-    def test_max_qty_matches_what_the_checks_allow(self):
+    def test_max_qty_is_the_largest_size_that_passes_with_a_fee_cushion(self):
+        """max_qty must pass the checks, sit just under the true ceiling, and
+        leave headroom for the spread and fees the fill will actually cost —
+        sizing to the last cent used to overdraw a cash account by the fee."""
         qty = self.engine.max_qty("AAPL", Side.BUY, self.p, 200.0)
         self.assertTrue(self.check(Order("AAPL", Side.BUY, qty), 200.0))
-        self.assertFalse(self.check(Order("AAPL", Side.BUY, qty + 1), 200.0))
+        # Find the real ceiling by bisection and confirm max_qty is within
+        # a small cushion below it, not far below and not above.
+        lo, hi = qty, qty * 2
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if self.check(Order("AAPL", Side.BUY, mid), 200.0):
+                lo = mid
+            else:
+                hi = mid
+        self.assertLessEqual(qty, lo)
+        self.assertGreater(qty, lo * 0.98)
 
 
 # =================================================================== broker
@@ -1556,3 +1569,448 @@ class TestWebApp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ============================================================== regressions
+#
+# Each test below pins a bug found after the first release. Like the matching
+# tests above, every one is written so the ORIGINAL implementation fails it.
+
+
+class TestRiskRegressions(unittest.TestCase):
+    def setUp(self):
+        self.p = Portfolio(starting_cash=10_000)
+        self.p.mark({"AAPL": 200.0, "BTCUSD": 64_000.0})
+        self.state = RiskState(start_of_day_equity=10_000)
+
+    def hold(self, symbol, qty, price):
+        side = Side.BUY if qty > 0 else Side.SELL
+        self.p.apply_fill(Fill("o", symbol, side, abs(qty), price, OPEN_TS),
+                          resolve(symbol))
+
+    def check(self, order, price, limits=None, state=None):
+        return RiskEngine(limits or RiskLimits()).check(
+            order, self.p, state or self.state, price, OPEN_TS)
+
+    def test_a_flip_through_zero_is_not_a_reduce(self):
+        """Long 1 share, sell 2,000: a 1,999-share short that must fund itself.
+
+        Treating every opposite-side order as risk-reducing let this through
+        with no buying-power, shorting or concentration check at all.
+        """
+        self.hold("AAPL", 1, 200.0)
+        decision = self.check(Order("AAPL", Side.SELL, 2_000), 200.0)
+        self.assertFalse(decision, "an opposite-side order was waved through")
+        # With concentration out of the way, buying power sees the opening leg.
+        loose = RiskLimits(max_position_pct_equity=0)
+        decision = self.check(Order("AAPL", Side.SELL, 2_000), 200.0, loose)
+        self.assertEqual(decision.code, "insufficient_buying_power")
+        # The genuine reduce is still fine.
+        self.assertTrue(self.check(Order("AAPL", Side.SELL, 1), 200.0, loose))
+
+    def test_a_flip_cannot_open_a_short_where_shorting_is_disabled(self):
+        self.hold("AAPL", 1, 200.0)
+        decision = self.check(Order("AAPL", Side.SELL, 2), 200.0,
+                              RiskLimits(allow_shorting=False))
+        self.assertEqual(decision.code, "shorting_disabled")
+
+    def test_pdt_blocks_only_the_close_of_a_position_opened_today(self):
+        self.hold("AAPL", 10, 200.0)
+        limits = RiskLimits(enforce_pdt=True)
+        flagged = RiskState(start_of_day_equity=10_000, day_trades_5d=3)
+        # Closing last week's swing trade is not a day trade.
+        self.assertTrue(self.check(Order("AAPL", Side.SELL, 10), 200.0,
+                                   limits, flagged))
+        # Closing something opened this session would be the fourth one.
+        today = RiskState(start_of_day_equity=10_000, day_trades_5d=3,
+                          opened_today=frozenset({"AAPL"}))
+        decision = self.check(Order("AAPL", Side.SELL, 10), 200.0, limits, today)
+        self.assertEqual(decision.code, "pdt_restriction")
+
+    def test_max_qty_does_not_subtract_the_position_twice(self):
+        p = Portfolio(starting_cash=100_000)
+        p.mark({"AAPL": 200.0})
+        engine = RiskEngine(RiskLimits(max_position_pct_equity=1.0))
+        fresh = engine.max_qty("AAPL", Side.BUY, p, 200.0)
+        p.apply_fill(Fill("o", "AAPL", Side.BUY, 100, 200.0, OPEN_TS),
+                     resolve("AAPL"))
+        held = engine.max_qty("AAPL", Side.BUY, p, 200.0)
+        # 100 of a ~1,000-share allowance is spent. Buying power already nets
+        # out that margin; subtracting the position from it too said ~800.
+        self.assertGreater(fresh - held, 50)
+        self.assertLess(fresh - held, 150)
+
+
+class TestPortfolioRegressions(unittest.TestCase):
+    def test_a_fully_paid_position_cannot_be_margin_called(self):
+        p = Portfolio(starting_cash=10_000)
+        p.mark({"BTCUSD": 50_000.0})
+        # Spend every dollar, then pay the fee: equity dips under the notional.
+        p.apply_fill(Fill("o", "BTCUSD", Side.BUY, 0.2, 50_000.0, OPEN_TS,
+                          fee=25.0), resolve("BTCUSD"))
+        self.assertLess(p.equity(), 10_000)
+        self.assertEqual(p.maintenance_margin(), 0.0)
+        self.assertFalse(p.margin_call(),
+                         "nothing was borrowed, so there is nothing to call")
+        p.mark({"BTCUSD": 30_000.0})        # a 40% crash on a cash position
+        self.assertFalse(p.margin_call())
+
+
+class TestFinancingRegressions(unittest.TestCase):
+    """Financing rolls at 17:00 ET. Every roll is charged exactly once."""
+
+    MONDAY = datetime(2026, 8, 24, 15, 0, tzinfo=UTC)     # 11:00 New York
+
+    def setUp(self):
+        self.now = self.MONDAY
+        self.portfolio = Portfolio(starting_cash=100_000)
+        self.broker = PaperBroker(self.portfolio, feed=None,
+                                  risk_limits=RiskLimits(enforce_pdt=False),
+                                  clock=lambda: self.now)
+
+    def charges(self, kind):
+        return [e for e in self.portfolio.ledger if e.kind == kind]
+
+    def open_short(self):
+        order = self.broker.submit(Order("AAPL", Side.SELL, 500),
+                                   quote=make_quote("AAPL", 200.0, ts=self.now))
+        self.assertIs(order.status, OrderStatus.FILLED, order.reject_reason)
+
+    def test_every_roll_is_settled_even_when_no_tick_landed_on_it(self):
+        order = self.broker.submit(Order("USDJPY", Side.BUY, 100_000),
+                                   quote=make_quote("USDJPY", 157.2, ts=self.now))
+        self.assertIs(order.status, OrderStatus.FILLED, order.reject_reason)
+        self.assertEqual(self.charges("swap"), [])
+        self.now = self.MONDAY + timedelta(days=3)           # Thursday 11:00
+        self.broker._accrue_financing()
+        swaps = self.charges("swap")
+        self.assertEqual([e.ts.weekday() for e in swaps], [0, 1, 2],
+                         "Monday, Tuesday and Wednesday rolls, each once")
+        mon, _, wed = swaps
+        self.assertAlmostEqual(abs(wed.amount), 3 * abs(mon.amount), delta=0.03,
+                               msg="Wednesday's roll carries the weekend")
+        # Asking again the same day charges nothing more.
+        self.broker._accrue_financing()
+        self.assertEqual(len(self.charges("swap")), 3)
+
+    def test_a_restart_neither_repeats_nor_skips_a_roll(self):
+        self.open_short()
+        self.now = self.MONDAY + timedelta(days=1)
+        self.broker._accrue_financing()
+        self.assertEqual(len(self.charges("borrow")), 1)
+        # Restart: a fresh broker over the same portfolio, two days later.
+        self.now = self.MONDAY + timedelta(days=3)
+        rebooted = PaperBroker(self.portfolio, feed=None, clock=lambda: self.now)
+        rebooted._accrue_financing()
+        self.assertEqual([e.ts.weekday() for e in self.charges("borrow")],
+                         [0, 1, 2])
+
+    def test_friday_borrow_covers_the_weekend(self):
+        self.open_short()
+        self.now = self.MONDAY + timedelta(days=7)            # next Monday
+        self.broker._accrue_financing()
+        borrows = self.charges("borrow")
+        self.assertEqual([e.ts.weekday() for e in borrows], [0, 1, 2, 3, 4])
+        # Each day's charge is rounded to the cent, hence the tolerance.
+        self.assertAlmostEqual(abs(borrows[4].amount), 3 * abs(borrows[0].amount),
+                               delta=0.03)
+
+
+class TestBacktestRegressions(unittest.TestCase):
+    def test_a_market_order_fills_on_the_bar_after_the_signal(self):
+        """Intraday crypto: the signal bar's own close is never the fill."""
+        from deoltech.strategies.base import Strategy
+        bars = SyntheticFeed().get_bars("BTCUSD", "1h", 120)
+
+        class BuyOnce(Strategy):
+            name = "buy-once"
+            done = False
+
+            def on_bar(self, ctx, bar):
+                if not self.done and len(ctx.bars) >= 5:
+                    self.done = True
+                    ctx.buy(0.1)
+
+        result = Backtester(starting_cash=100_000).run(BuyOnce(), bars,
+                                                       symbol="BTCUSD")
+        # One entry, plus the backtester's own close on the final bar.
+        self.assertEqual([o.side for o in result.orders], [Side.BUY, Side.SELL])
+        order, fill = result.orders[0], result.fills[0]
+        signal = next(i for i, b in enumerate(bars) if b.ts == order.created_at)
+        self.assertEqual(fill.ts, bars[signal + 1].ts,
+                         "filled on the bar it was placed on: lookahead")
+        self.assertEqual(fill.reference_price, bars[signal + 1].open)
+
+    def test_a_backtest_charges_and_reports_financing(self):
+        from deoltech.strategies.base import Strategy
+        bars = SyntheticFeed().get_bars("AAPL", "1d", 120)
+
+        class ShortAndHold(Strategy):
+            name = "short-and-hold"
+            done = False
+
+            def on_bar(self, ctx, bar):
+                if not self.done:
+                    self.done = True
+                    ctx.sell(100)
+
+        result = Backtester(starting_cash=100_000).run(ShortAndHold(), bars,
+                                                       symbol="AAPL")
+        perf = result.performance
+        self.assertGreater(perf.financing_costs, 0, "a short pays borrow every day")
+        self.assertAlmostEqual(perf.total_fees,
+                               perf.execution_fees + perf.financing_costs, places=3)
+        # The same run with borrow switched off must be richer by exactly the
+        # borrow it no longer paid: the charge hit equity, not just the report.
+        free = Backtester(starting_cash=100_000,
+                          fee_schedule=FeeSchedule(borrow_enabled=False)).run(
+            ShortAndHold(), bars, symbol="AAPL")
+        self.assertEqual(free.performance.financing_costs, 0.0)
+        self.assertAlmostEqual(free.ending_equity - result.ending_equity,
+                               perf.financing_costs, delta=0.02)
+
+    def test_an_ioc_that_misses_its_bar_is_cancelled_not_left_working(self):
+        from deoltech.strategies.base import Strategy
+        bars = SyntheticFeed().get_bars("AAPL", "1d", 60)
+
+        class LowBall(Strategy):
+            name = "lowball"
+            done = False
+
+            def on_bar(self, ctx, bar):
+                if not self.done:
+                    self.done = True
+                    ctx.buy(10, limit=round(bar.low * 0.8, 2),
+                            tif=TimeInForce.IOC)
+
+        result = Backtester().run(LowBall(), bars, symbol="AAPL")
+        self.assertEqual([o.status for o in result.orders],
+                         [OrderStatus.CANCELED])
+
+
+class TestMatchingRegressions(unittest.TestCase):
+    def setUp(self):
+        self.inst = resolve("AAPL")
+        self.matcher = Matcher(SlippageModel(enabled=False))
+        self.bar = Bar("AAPL", OPEN_TS, open=100.0, high=101.0, low=99.0,
+                       close=100.5, volume=1e6)
+
+    def test_a_marketable_limit_on_a_bar_takes_at_the_open_not_its_limit(self):
+        order = Order("AAPL", Side.BUY, 100, OrderType.LIMIT, limit_price=150.0)
+        fill = self.matcher.match_bar(order, self.inst, self.bar).fills[0]
+        self.assertIs(fill.liquidity, Liquidity.TAKER)
+        self.assertLessEqual(fill.price, self.bar.high,
+                             "a print above the bar's range never happened")
+        self.assertAlmostEqual(fill.price, self.bar.open, delta=0.06)
+
+    def test_a_limit_that_rested_a_bar_fills_passively_at_its_limit(self):
+        order = Order("AAPL", Side.BUY, 100, OrderType.LIMIT, limit_price=99.5)
+        first = Bar("AAPL", OPEN_TS, open=100.0, high=101.0, low=99.8,
+                    close=100.5, volume=1e6)
+        self.assertEqual(self.matcher.match_bar(order, self.inst, first).fills, [])
+        self.assertTrue(order.rested)
+        fill = self.matcher.match_bar(order, self.inst, self.bar).fills[0]
+        self.assertEqual(fill.price, 99.5)
+        self.assertIs(fill.liquidity, Liquidity.MAKER)
+
+    def test_a_trailing_stop_is_tested_before_this_bars_high_raises_it(self):
+        """A bar that runs 100 -> 110 -> 100.5 cannot elect a 5% trail at
+        104.5: that stop did not exist until the high had printed."""
+        order = Order("AAPL", Side.SELL, 100, OrderType.TRAILING_STOP,
+                      trail_pct=5.0)
+        arm = Bar("AAPL", OPEN_TS, open=100.0, high=100.5, low=99.5,
+                  close=100.0, volume=1e6)
+        self.assertEqual(self.matcher.match_bar(order, self.inst, arm).fills, [])
+        self.assertAlmostEqual(order.stop_price, 95.475, delta=0.01)
+        spike = Bar("AAPL", OPEN_TS + timedelta(days=1), open=100.0, high=110.0,
+                    low=100.5, close=101.0, volume=1e6)
+        self.assertEqual(self.matcher.match_bar(order, self.inst, spike).fills, [],
+                         "the raised stop was not in force when the low printed")
+        self.assertAlmostEqual(order.stop_price, 104.5, delta=0.01)
+        # The next bar opens under the stop: the gap rule fills at the open.
+        gap = Bar("AAPL", OPEN_TS + timedelta(days=2), open=103.0, high=104.0,
+                  low=102.0, close=103.5, volume=1e6)
+        fill = self.matcher.match_bar(order, self.inst, gap).fills[0]
+        self.assertAlmostEqual(fill.price, 103.0, delta=0.06)
+
+
+class TestSlippageRegressions(unittest.TestCase):
+    def setUp(self):
+        self.inst = resolve("AAPL")
+        self.model = SlippageModel()
+
+    def test_impact_uses_the_daily_adv_not_the_session_so_far(self):
+        early = make_quote(volume=1_000)               # 9:31, a trickle so far
+        full = make_quote(volume=self.inst.adv)
+        qty = self.inst.adv * 0.01
+        self.assertEqual(self.model.impact_bps(self.inst, qty, early),
+                         self.model.impact_bps(self.inst, qty, full))
+        heavy = make_quote(volume=self.inst.adv * 10)
+        self.assertLessEqual(self.model.impact_bps(self.inst, qty, heavy),
+                             self.model.impact_bps(self.inst, qty, full))
+
+    def test_walking_the_book_stops_at_a_limit_orders_cap(self):
+        book = build_book(self.inst, make_quote())
+        huge = self.inst.adv                            # deeper than the ladder
+        _, filled_free = walk_the_book(book, self.inst, Side.BUY, huge)
+        cap = book.ask + self.inst.tick_size
+        vwap, filled = walk_the_book(book, self.inst, Side.BUY, huge, price_cap=cap)
+        self.assertGreater(filled, 0)
+        self.assertLess(filled, filled_free,
+                        "size resting beyond the cap is not size a limit can take")
+        self.assertLessEqual(vwap, cap + 1e-9)
+
+
+class TestAnalyticsRegressions(unittest.TestCase):
+    def test_round_trip_pnl_is_converted_from_the_quote_currency(self):
+        entry = Fill("a", "USDJPY", Side.BUY, 100_000, 150.00, OPEN_TS,
+                     fx_rate=1 / 150.0)
+        exit_ = Fill("b", "USDJPY", Side.SELL, 100_000, 150.10,
+                     OPEN_TS + timedelta(hours=1), fx_rate=1 / 150.1)
+        trip = analytics.reconstruct_trades([entry, exit_])[0]
+        # 10,000 yen of profit is about $66.62 — not $10,000.
+        self.assertAlmostEqual(trip.pnl, 10_000 / 150.1, delta=0.05)
+
+    def test_financing_comes_out_of_net_and_shows_in_costs(self):
+        from deoltech.engine.broker import EquityPoint
+        fills = [Fill("a", "AAPL", Side.BUY, 100, 100.0, OPEN_TS, fee=1.0),
+                 Fill("b", "AAPL", Side.SELL, 100, 110.0,
+                      OPEN_TS + timedelta(days=1), fee=1.0)]
+        curve = [EquityPoint(OPEN_TS + timedelta(days=i), 100_000 + 500 * i,
+                             100_000, 0, 0) for i in range(3)]
+        bare = analytics.analyze(curve, fills)
+        carried = analytics.analyze(curve, fills, financing=42.0)
+        self.assertEqual(carried.financing_costs, 42.0)
+        self.assertAlmostEqual(carried.execution_fees, 2.0)
+        self.assertAlmostEqual(carried.total_fees, bare.total_fees + 42.0)
+        self.assertAlmostEqual(carried.net_pnl, bare.net_pnl - 42.0)
+
+    def test_financing_from_ledger_sums_swap_and_borrow_only(self):
+        p = Portfolio(starting_cash=1_000)
+        p.accrue(5.0, "swap", "USDJPY")
+        p.accrue(2.5, "borrow", "AAPL")
+        p.credit(100.0, "deposit")
+        self.assertAlmostEqual(analytics.financing_from_ledger(p.ledger), 7.5)
+
+
+class TestPersistenceRegressions(unittest.TestCase):
+    def setUp(self):
+        from deoltech import accounts, auth, db
+        self.accounts, self.db = accounts, db
+        self.path = os.path.join(_TMPDIR, f"regr-{id(self)}.db")
+        os.environ["DEOLTECH_DB"] = self.path
+        self.conn = db.connect(self.path)
+        self.user, _ = auth.bootstrap_admin(self.conn, "owner")
+        self.account_id = accounts.create_account(self.conn, self.user.id,
+                                                  "Main", starting_cash=50_000)
+        from deoltech.feeds import build_feed
+        self.service = accounts.AccountService(
+            lambda: db.connect(self.path), feed=build_feed("synthetic"))
+
+    def tearDown(self):
+        os.environ["DEOLTECH_DB"] = os.path.join(_TMPDIR, "test.db")
+
+    def test_order_runtime_state_survives_a_restart(self):
+        price = self.service.quote("BTCUSD").last
+        expires = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+        gtd = self.service.submit(self.account_id, Order(
+            "BTCUSD", Side.BUY, 0.01, OrderType.LIMIT,
+            limit_price=round(price * 0.85, 2), tif=TimeInForce.GTD,
+            expires_at=expires))
+        self.service.submit(self.account_id, Order("BTCUSD", Side.BUY, 0.05))
+        trail = self.service.submit(self.account_id, Order(
+            "BTCUSD", Side.SELL, 0.05, OrderType.TRAILING_STOP, trail_pct=5.0,
+            reduce_only=True, tif=TimeInForce.GTC))
+        self.assertIsNotNone(trail.peak_price)
+
+        self.service.evict(self.account_id)                 # restart
+        broker = self.service.broker(self.account_id)
+        again = broker.orders[gtd.id]
+        self.assertIs(again.tif, TimeInForce.GTD)
+        self.assertEqual(again.expires_at, expires,
+                         "a good-till-date order forgot its date")
+        self.assertIn(gtd.id, broker.working)
+        t2 = broker.orders[trail.id]
+        self.assertEqual(t2.trail_pct, 5.0)
+        self.assertEqual(t2.peak_price, trail.peak_price)
+        self.assertEqual(t2.stop_price, trail.stop_price)
+        self.assertTrue(t2.reduce_only)
+
+    def test_refresh_notices_more_than_a_status_change(self):
+        o = Order("AAPL", Side.SELL, 10, OrderType.TRAILING_STOP, trail_pct=5.0)
+        before = self.accounts.AccountService._order_state(o)
+        o.peak_price, o.stop_price = 210.0, 199.5
+        self.assertNotEqual(before, self.accounts.AccountService._order_state(o))
+
+    def test_a_quiet_account_does_not_grow_the_equity_curve(self):
+        broker = self.service.broker(self.account_id)
+
+        def rows():
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM equity_curve WHERE account_id = ?",
+                (self.account_id,)).fetchone()[0]
+
+        for _ in range(25):
+            broker._snapshot_equity()
+            self.service.persist(self.account_id)
+        self.assertLessEqual(rows(), 1)
+        broker.portfolio.credit(100.0, "deposit")
+        broker._snapshot_equity()
+        self.service.persist(self.account_id)
+        self.assertEqual(rows(), 2, "a real change is still recorded")
+
+
+class TestFeedRegressions(unittest.TestCase):
+    def test_degraded_clears_once_the_live_feed_recovers(self):
+        from deoltech.feeds.base import CompositeFeed, Feed, FeedUnavailable
+        synthetic = SyntheticFeed()
+
+        class Flaky(Feed):
+            name = "flaky"
+            down = True
+
+            def get_quote(self, symbol):
+                if self.down:
+                    raise FeedUnavailable("vendor down")
+                return synthetic.get_quote(symbol)
+
+        flaky = Flaky()
+        feed = CompositeFeed(flaky, synthetic)
+        feed.get_quotes(["AAPL"])
+        self.assertTrue(feed.degraded)
+        flaky.down = False
+        feed.get_quotes(["AAPL"])
+        self.assertFalse(feed.degraded, "a recovered feed is not degraded")
+
+    def test_unparseable_dates_keep_the_vendors_order(self):
+        rows = [[f"bar-{i}", 100 + i, 101 + i, 99 + i, 100 + i, 1e6]
+                for i in range(5)]
+        bars = parse_series(rows, "AAPL")
+        self.assertEqual([b.close for b in bars], [100, 101, 102, 103, 104])
+
+
+class TestAuthRegressions(unittest.TestCase):
+    def setUp(self):
+        from deoltech import auth, db
+        self.auth, self.db = auth, db
+        self.path = os.path.join(_TMPDIR, f"authregr-{id(self)}.db")
+        self.conn = db.connect(self.path)
+        self.admin, self.password = auth.bootstrap_admin(self.conn, "root")
+
+    def test_an_expired_lockout_starts_the_count_again(self):
+        auth = self.auth
+        auth.create_user(self.conn, "target", "T@rgetPass2026!",
+                         role=auth.Role.VIEWER, actor=self.admin)
+        for _ in range(auth.MAX_FAILED_LOGINS):
+            with self.assertRaises(auth.AuthError):
+                auth.login(self.conn, "target", "wrong")
+        # Time passes.
+        past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        self.conn.execute("UPDATE users SET locked_until = ? WHERE username = ?",
+                          (past, "target"))
+        self.conn.commit()
+        # One typo after the window must not re-lock for another full window.
+        with self.assertRaises(auth.AuthError):
+            auth.login(self.conn, "target", "wrong")
+        user, _ = auth.login(self.conn, "target", "T@rgetPass2026!")
+        self.assertEqual(user.username, "target")

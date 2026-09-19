@@ -115,12 +115,15 @@ class Backtester:
 
         portfolio = Portfolio(account_id=f"backtest:{strategy.name}",
                               starting_cash=self.starting_cash)
+        # defer_matching is the whole guarantee: an order the strategy places
+        # while looking at bar i is only ever matched against bar i+1.
         broker = PaperBroker(portfolio, feed=None,
                              fee_schedule=self.fee_schedule,
                              risk_limits=self.risk_limits,
                              slippage=self.slippage,
-                             auto_liquidate=True)
-        matcher = Matcher(self.slippage, fee_fn=broker._fee_fn)
+                             auto_liquidate=True, defer_matching=True)
+        matcher = Matcher(self.slippage, fee_fn=broker._fee_fn,
+                          fx_rate_fn=portfolio.fx_rate)
 
         ctx = StrategyContext(broker=broker, symbol=sym,
                               params=dict(strategy.params),
@@ -149,13 +152,21 @@ class Backtester:
                 for fill in result.fills:
                     broker._book(order, fill, inst)
                     strategy.on_fill(ctx, fill)
-                # DAY orders do not survive to the next bar.
-                if order.is_open and order.tif is TimeInForce.DAY:
+                # DAY orders do not survive to the next bar, and an
+                # immediate-or-cancel order had its one chance on this one.
+                if order.is_open and order.tif in (TimeInForce.IOC, TimeInForce.FOK):
+                    broker._finish(order, OrderStatus.CANCELED,
+                                   f"{order.tif.value}: not filled on the next bar")
+                elif order.is_open and order.tif is TimeInForce.DAY:
                     broker._finish(order, OrderStatus.EXPIRED,
                                    "day order expired at the bar's close")
 
-            # 2. Mark to this bar's close.
+            # 2. Mark to this bar's close, then settle any financing roll that
+            #    passed. A backtest that skips swap and borrow is not a result —
+            #    a carry-negative FX short or a hard-to-borrow equity short
+            #    looks profitable on paper only because nobody sent the bill.
             portfolio.mark({sym: bar.close})
+            broker._accrue_financing()
 
             # 3. Record equity, and force a liquidation if margin is breached.
             if portfolio.margin_call():
@@ -183,6 +194,7 @@ class Backtester:
                             qty=inst.round_qty(abs(pos.qty)),
                             tag="backtest-final-close")
             closing.status = OrderStatus.NEW
+            closing.created_at = closing.updated_at = final.ts
             broker.orders[closing.id] = closing
             for fill in matcher.match_bar(closing, inst, final, prev_close).fills:
                 broker._book(closing, fill, inst)
@@ -200,9 +212,11 @@ class Backtester:
             equity_curve=curve, fills=list(broker.fills),
             orders=list(broker.orders.values()), log=list(ctx._log),
         )
+        from .analytics import financing_from_ledger
         result.performance = analyze(
             curve, broker.fills, asset_class=inst.asset_class.value,
-            strategies={o.id: o.strategy for o in broker.orders.values() if o.strategy})
+            strategies={o.id: o.strategy for o in broker.orders.values() if o.strategy},
+            financing=financing_from_ledger(portfolio.ledger))
         if benchmark:
             result.benchmark_return_pct = round(
                 (bars[-1].close / bars[0].open - 1.0) * 100.0, 3)

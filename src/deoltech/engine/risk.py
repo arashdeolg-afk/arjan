@@ -88,6 +88,10 @@ class RiskState:
     day_trades_5d: int = 0
     realized_today: float = 0.0
     start_of_day_equity: float = 0.0
+    # Symbols with a position opened (or added to) during today's session.
+    # Closing one of these is a day trade; closing a position opened last
+    # week is not, and the PDT rule must not block it.
+    opened_today: frozenset[str] = frozenset()
 
 
 class RiskEngine:
@@ -145,7 +149,7 @@ class RiskEngine:
                             f"(limit {lim.fat_finger_pct:.0f}%)")
 
         # --- 4. Sizing --------------------------------------------------------
-        rate = portfolio.fx_rate(inst.quote_ccy)
+        rate = self._rate(inst, portfolio, last_price)
         notional = inst.notional(order.qty, order.limit_price or last_price) * rate
         if notional > lim.max_order_notional:
             return deny("order_too_large",
@@ -156,8 +160,18 @@ class RiskEngine:
         current_qty = pos.qty if pos else 0.0
         signed = order.side.sign * order.qty
         resulting_qty = current_qty + signed
-        reduces = abs(resulting_qty) < abs(current_qty) or (
-            current_qty != 0 and (current_qty > 0) != (signed > 0))
+
+        # Split the order into the part that closes existing exposure and the
+        # part that opens new exposure. An opposite-side order is NOT
+        # automatically risk-reducing: long 1 share, sell 2,000 shares is a
+        # 1,999-share short, and every check below must see that opening leg.
+        # Treating any opposite-side order as a "reduce" let a flip through
+        # zero skip buying power, shorting, concentration and margin-call
+        # checks entirely.
+        opposite = current_qty != 0 and (current_qty > 0) != (signed > 0)
+        closing_qty = min(abs(signed), abs(current_qty)) if opposite else 0.0
+        opening_qty = abs(order.qty) - closing_qty
+        reduces = opening_qty <= 1e-12
 
         # --- 5. reduce_only ---------------------------------------------------
         if order.reduce_only:
@@ -169,7 +183,7 @@ class RiskEngine:
                             "reduce-only order would increase the position")
 
         # --- 6. Shorting ------------------------------------------------------
-        if resulting_qty < -1e-12 and current_qty <= 0:
+        if resulting_qty < -1e-12 and opening_qty > 1e-12:
             if not lim.allow_shorting:
                 return deny("shorting_disabled",
                             "short selling is not enabled on this account")
@@ -201,8 +215,14 @@ class RiskEngine:
             leverage = lim.max_leverage_override or inst.max_leverage
             if not lim.allow_margin:
                 leverage = 1.0
-            required = notional / max(1.0, leverage)
-            available = portfolio.available_funds()
+            opening_notional = inst.notional(
+                opening_qty, order.limit_price or last_price) * rate
+            required = opening_notional / max(1.0, leverage)
+            # Closing the existing leg releases its margin, which is then
+            # available to fund the new one.
+            released = (inst.initial_margin(closing_qty, last_price) * rate
+                        if closing_qty > 0 else 0.0)
+            available = portfolio.available_funds() + released
             if required > available + 1e-6:
                 return deny("insufficient_buying_power",
                             f"needs {required:,.2f} of margin, account has "
@@ -216,9 +236,15 @@ class RiskEngine:
                         "are accepted until it is cured")
 
         # --- 10. Pattern day trader -------------------------------------------
+        # Blocks the FOURTH day trade: closing a position that was opened
+        # today. Closing last month's swing trade is not a day trade, and a
+        # rule that stopped a trader exiting a losing position for a week
+        # would be worse than the risk it exists to limit.
         if (lim.enforce_pdt and inst.asset_class is AssetClass.EQUITY
                 and equity < lim.pdt_equity_threshold
-                and state.day_trades_5d >= lim.pdt_max_day_trades and reduces):
+                and state.day_trades_5d >= lim.pdt_max_day_trades
+                and closing_qty > 1e-12
+                and order.symbol.upper() in state.opened_today):
             return deny("pdt_restriction",
                         f"pattern day trader rule: {state.day_trades_5d} day trades in "
                         f"5 business days with equity under "
@@ -243,6 +269,24 @@ class RiskEngine:
 
     # ------------------------------------------------------------------ sizing
 
+    @staticmethod
+    def _rate(inst: Instrument, portfolio: Portfolio, last_price: float) -> float:
+        """Account-currency value of one unit of the instrument's quote currency.
+
+        The portfolio resolves this from its marks. Before the first mark of a
+        pair such as USD/JPY the only price that exists is the one on the
+        order, and the pair itself IS the conversion: with no rate, ¥15.7m of
+        notional was measured as $15.7m and the first USD/JPY ticket in a fresh
+        account was refused as 15x too large.
+        """
+        rate = portfolio.fx_rate(inst.quote_ccy)
+        base = portfolio.base_ccy
+        if (inst.quote_ccy != base and last_price > 0
+                and portfolio.price_of(inst.symbol) <= 0
+                and inst.symbol == f"{base}{inst.quote_ccy}"):
+            rate = 1.0 / last_price
+        return rate
+
     def max_qty(self, symbol: str, side: Side, portfolio: Portfolio,
                 price: float) -> float:
         """Largest quantity this account could put on right now.
@@ -255,7 +299,7 @@ class RiskEngine:
         inst = resolve(symbol)
         if price <= 0:
             return 0.0
-        rate = portfolio.fx_rate(inst.quote_ccy)
+        rate = self._rate(inst, portfolio, price)
         unit = price * inst.multiplier * rate
         if unit <= 0:
             return 0.0
@@ -265,19 +309,25 @@ class RiskEngine:
             leverage = 1.0
         equity = portfolio.equity()
 
-        caps = [
-            max(0.0, portfolio.available_funds()) * leverage / unit,
-            lim.max_order_notional / unit,
-            lim.max_position_notional / unit,
-        ]
+        # Leave room for the spread, slippage and fees the fill will actually
+        # cost. Sizing to the last cent of buying power lands the fill a few
+        # dollars short, which on a cash instrument reads as an overdraft.
+        from .fees import round_trip_cost_bps
+        cushion = round_trip_cost_bps(inst, max(1.0, equity)) / 10_000.0 + 0.002
+        funds = max(0.0, portfolio.available_funds()) * (1.0 - cushion)
+
+        # `available_funds` already nets out the margin of what is held, so
+        # this cap is incremental and must NOT have the position subtracted.
+        incremental = [funds * leverage / unit, lim.max_order_notional / unit]
+        # These are caps on the TOTAL position, so the existing size counts.
+        total = [lim.max_position_notional / unit]
         if equity > 0 and lim.max_position_pct_equity > 0:
             # Margin-based, matching `check`: the cap is on committed margin,
             # so on a 50:1 pair it permits 50x the notional it would on cash.
-            caps.append(equity * lim.max_position_pct_equity * leverage / unit)
+            total.append(equity * lim.max_position_pct_equity * leverage / unit)
 
         pos = portfolio.positions.get(symbol.upper())
         if pos and not pos.is_flat and (pos.qty > 0) == (side is Side.BUY):
-            # Adding to an existing position: the caps apply to the total.
-            caps = [c - abs(pos.qty) for c in caps]
+            total = [c - abs(pos.qty) for c in total]
 
-        return max(0.0, inst.round_qty(min(caps)))
+        return max(0.0, inst.round_qty(min(incremental + total)))

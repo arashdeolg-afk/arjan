@@ -314,6 +314,18 @@ class Order:
             "oco_group": self.oco_group,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
+            "expires_at": iso(self.expires_at) if self.expires_at else None,
+            "take_profit": self.take_profit,
+            "stop_loss": self.stop_loss,
+            "trail_pct": self.trail_pct,
+            "trail_amount": self.trail_amount,
+            "triggered": int(self.triggered),
+            "peak_price": self.peak_price,
+            "rested": int(self.rested),
+            "post_only": int(self.post_only),
+            "reduce_only": int(self.reduce_only),
+            "display_qty": self.display_qty,
+            "allow_extended": int(self.allow_extended),
         }
 
 
@@ -332,6 +344,11 @@ class Fill:
     slippage_bps: float = 0.0
     reference_price: float = 0.0   # what the mid was when the order arrived
     venue: str = "paper"
+    # Account currency per one unit of the instrument's quote currency at the
+    # moment of execution. Anything computing P&L from fills after the fact
+    # multiplies by this; without it a 100k USD/JPY round trip reports yen as
+    # dollars — 147x too large.
+    fx_rate: float = 1.0
 
     @property
     def notional(self) -> float:

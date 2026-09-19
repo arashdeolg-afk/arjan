@@ -24,7 +24,7 @@ import json
 import sqlite3
 import threading
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .db import audit, now_iso, transaction
 from .engine.broker import EquityPoint, PaperBroker
@@ -197,9 +197,14 @@ def _load_orders(conn: sqlite3.Connection, account_id: int, broker: PaperBroker)
                 symbol=r["symbol"], side=Side(r["side"]), qty=r["qty"],
                 order_type=OrderType(r["order_type"]),
                 limit_price=r["limit_price"], stop_price=r["stop_price"],
+                trail_pct=r["trail_pct"], trail_amount=r["trail_amount"],
                 tif=TimeInForce(r["tif"]),
-                expires_at=None, parent_id=r["parent_id"],
-                oco_group=r["oco_group"], strategy=r["strategy"], tag=r["tag"],
+                expires_at=parse_iso(r["expires_at"]) if r["expires_at"] else None,
+                post_only=bool(r["post_only"]), reduce_only=bool(r["reduce_only"]),
+                display_qty=r["display_qty"], allow_extended=bool(r["allow_extended"]),
+                parent_id=r["parent_id"], oco_group=r["oco_group"],
+                take_profit=r["take_profit"], stop_loss=r["stop_loss"],
+                strategy=r["strategy"], tag=r["tag"],
                 client_order_id=r["client_order_id"] or r["id"],
             )
         except (ValueError, TypeError):
@@ -212,7 +217,12 @@ def _load_orders(conn: sqlite3.Connection, account_id: int, broker: PaperBroker)
         order.reject_reason = r["reject_reason"]
         order.created_at = parse_iso(r["created_at"])
         order.updated_at = parse_iso(r["updated_at"])
-        order.triggered = order.status is OrderStatus.PARTIALLY_FILLED
+        # Resume exactly where the engine left off: an elected stop stays
+        # elected, a trailing stop keeps its peak, a resting limit keeps its
+        # place in the queue.
+        order.triggered = bool(r["triggered"])
+        order.peak_price = r["peak_price"]
+        order.rested = bool(r["rested"])
         broker.orders[order.id] = order
         if order.status.is_open:
             broker.working[order.id] = order
@@ -226,7 +236,8 @@ def _load_orders(conn: sqlite3.Connection, account_id: int, broker: PaperBroker)
             order_id=r["order_id"], symbol=r["symbol"], side=Side(r["side"]),
             qty=r["qty"], price=r["price"], ts=parse_iso(r["ts"]),
             fee=r["fee"], liquidity=Liquidity(r["liquidity"]),
-            slippage_bps=r["slippage_bps"], reference_price=r["reference_price"]))
+            slippage_bps=r["slippage_bps"], reference_price=r["reference_price"],
+            fx_rate=r["fx_rate"] if r["fx_rate"] else 1.0))
 
     broker.equity_curve = [
         EquityPoint(parse_iso(r["ts"]), r["equity"], r["cash"],
@@ -243,21 +254,31 @@ def save_order(conn: sqlite3.Connection, account_id: int, order: Order) -> None:
             """INSERT INTO orders (id, account_id, client_order_id, symbol, side,
                     qty, order_type, limit_price, stop_price, tif, status,
                     filled_qty, avg_fill_price, fees_paid, reject_reason,
-                    strategy, tag, parent_id, oco_group, created_at, updated_at)
+                    strategy, tag, parent_id, oco_group, created_at, updated_at,
+                    expires_at, take_profit, stop_loss, trail_pct, trail_amount,
+                    triggered, peak_price, rested, post_only, reduce_only,
+                    display_qty, allow_extended)
                VALUES (:id, :account_id, :client_order_id, :symbol, :side, :qty,
                     :order_type, :limit_price, :stop_price, :tif, :status,
                     :filled_qty, :avg_fill_price, :fees_paid, :reject_reason,
                     :strategy, :tag, :parent_id, :oco_group, :created_at,
-                    :updated_at)
+                    :updated_at, :expires_at, :take_profit, :stop_loss,
+                    :trail_pct, :trail_amount, :triggered, :peak_price, :rested,
+                    :post_only, :reduce_only, :display_qty, :allow_extended)
                ON CONFLICT(id) DO UPDATE SET
                     status = excluded.status,
+                    qty = excluded.qty,
                     filled_qty = excluded.filled_qty,
                     avg_fill_price = excluded.avg_fill_price,
                     fees_paid = excluded.fees_paid,
                     reject_reason = excluded.reject_reason,
                     limit_price = excluded.limit_price,
                     stop_price = excluded.stop_price,
-                    updated_at = excluded.updated_at""",
+                    updated_at = excluded.updated_at,
+                    expires_at = excluded.expires_at,
+                    triggered = excluded.triggered,
+                    peak_price = excluded.peak_price,
+                    rested = excluded.rested""",
             {**row, "account_id": account_id})
 
 
@@ -265,11 +286,12 @@ def save_fill(conn: sqlite3.Connection, account_id: int, fill: Fill) -> None:
     with transaction(conn):
         conn.execute(
             """INSERT INTO fills (account_id, order_id, symbol, side, qty, price,
-                                  fee, liquidity, slippage_bps, reference_price, ts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  fee, liquidity, slippage_bps, reference_price, ts,
+                                  fx_rate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (account_id, fill.order_id, fill.symbol, fill.side.value, fill.qty,
              fill.price, fill.fee, fill.liquidity.value, fill.slippage_bps,
-             fill.reference_price, fill.ts.isoformat()))
+             fill.reference_price, fill.ts.isoformat(), fill.fx_rate))
 
 
 def save_portfolio(conn: sqlite3.Connection, account_id: int,
@@ -341,6 +363,8 @@ class AccountService:
         self.feed_mode = feed_mode
         self._brokers: dict[int, PaperBroker] = {}
         self._ledger_marks: dict[int, int] = {}
+        # (equity, ts) of the last curve point written, per account.
+        self._equity_marks: dict[int, tuple[float, datetime]] = {}
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------- brokers
@@ -364,6 +388,9 @@ class AccountService:
             _load_orders(conn, account_id, broker)
             self._brokers[account_id] = broker
             self._ledger_marks[account_id] = len(portfolio.ledger)
+            if broker.equity_curve:
+                tail = broker.equity_curve[-1]
+                self._equity_marks[account_id] = (tail.equity, tail.ts)
             return broker
 
     def evict(self, account_id: int) -> None:
@@ -386,7 +413,17 @@ class AccountService:
         self._ledger_marks[account_id] = save_portfolio(
             conn, account_id, broker.portfolio, mark)
         if broker.equity_curve:
-            save_equity_point(conn, account_id, broker.equity_curve[-1])
+            # Write a curve point when equity actually moved, plus a heartbeat
+            # so a flat account still shows it was alive. Writing one on every
+            # persist — every poll from every open tab — grew the table by
+            # ~14,000 rows per account per day of nothing happening.
+            point = broker.equity_curve[-1]
+            last = self._equity_marks.get(account_id)
+            moved = last is None or abs(point.equity - last[0]) >= 0.01
+            stale = last is not None and (point.ts - last[1]) >= timedelta(minutes=15)
+            if moved or stale:
+                save_equity_point(conn, account_id, point)
+                self._equity_marks[account_id] = (point.equity, point.ts)
 
     # -------------------------------------------------------------- trading
 
@@ -409,13 +446,22 @@ class AccountService:
             self.persist(account_id, [order] if order else [])
         return ok
 
+    @staticmethod
+    def _order_state(o: Order) -> tuple:
+        """Everything a tick can change on an order. Comparing only the
+        status missed a second partial fill on an already partially-filled
+        order, a trailing stop's ratchet, and a stop's election — all of which
+        were then lost on restart."""
+        return (o.status, o.filled_qty, o.avg_fill_price, o.fees_paid,
+                o.stop_price, o.triggered, o.rested, o.peak_price, o.reject_reason)
+
     def refresh(self, account_id: int, symbols: list[str] | None = None) -> list[Fill]:
         """Pull quotes, advance working orders, persist anything that changed."""
         broker = self.broker(account_id)
-        before_orders = {o.id: o.status for o in broker.orders.values()}
+        before = {o.id: self._order_state(o) for o in broker.orders.values()}
         fills = broker.refresh(symbols)
         changed = [o for o in broker.orders.values()
-                   if before_orders.get(o.id) != o.status]
+                   if before.get(o.id) != self._order_state(o)]
         self.persist(account_id, changed, fills)
         return fills
 

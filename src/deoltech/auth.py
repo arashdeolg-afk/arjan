@@ -471,16 +471,20 @@ def login(conn: sqlite3.Connection, username: str, password: str, *,
               detail="no such user", ip=ip, severity="warning")
         raise AuthError(generic)
 
+    failed_so_far = row["failed_logins"]
     if row["locked_until"]:
         locked_until = datetime.fromisoformat(row["locked_until"])
         if locked_until > datetime.now(timezone.utc):
             wait = int((locked_until - datetime.now(timezone.utc)).total_seconds() / 60) + 1
             raise AuthError(f"Account locked after repeated failed sign-ins. "
                             f"Try again in {wait} minute{'s' if wait != 1 else ''}.")
+        # The lockout has served its time. Start the count again, otherwise
+        # one typo re-locks the account for another full window.
+        failed_so_far = 0
 
     ok, needs_rehash = verify_password(password, row["password_hash"])
     if not ok:
-        failed = row["failed_logins"] + 1
+        failed = failed_so_far + 1
         locked = None
         if failed >= MAX_FAILED_LOGINS:
             locked = (datetime.now(timezone.utc)

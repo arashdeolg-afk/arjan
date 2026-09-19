@@ -143,7 +143,23 @@ CREATE TABLE IF NOT EXISTS orders (
     parent_id           TEXT,
     oco_group           TEXT,
     created_at          TEXT    NOT NULL,
-    updated_at          TEXT    NOT NULL
+    updated_at          TEXT    NOT NULL,
+    -- Runtime state. Without these a restart silently changed every working
+    -- order: DAY orders never expired, trailing stops forgot their peak, a
+    -- resting limit lost its maker status, brackets lost their exits, and
+    -- GTD orders vanished because the reconstructed Order had no expiry.
+    expires_at          TEXT,
+    take_profit         REAL,
+    stop_loss           REAL,
+    trail_pct           REAL,
+    trail_amount        REAL,
+    triggered           INTEGER NOT NULL DEFAULT 0,
+    peak_price          REAL,
+    rested              INTEGER NOT NULL DEFAULT 0,
+    post_only           INTEGER NOT NULL DEFAULT 0,
+    reduce_only         INTEGER NOT NULL DEFAULT 0,
+    display_qty         REAL,
+    allow_extended      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_orders_account ON orders(account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(account_id, status);
@@ -162,7 +178,10 @@ CREATE TABLE IF NOT EXISTS fills (
     liquidity           TEXT    NOT NULL DEFAULT 'taker',
     slippage_bps        REAL    NOT NULL DEFAULT 0,
     reference_price     REAL    NOT NULL DEFAULT 0,
-    ts                  TEXT    NOT NULL
+    ts                  TEXT    NOT NULL,
+    -- Account currency per unit of quote currency at execution, so P&L can
+    -- be rebuilt from fills in the right currency later.
+    fx_rate             REAL    NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_fills_account ON fills(account_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_fills_symbol ON fills(account_id, symbol);
@@ -247,9 +266,35 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     setattr(_local, key, conn)
     return conn
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS does not
+# touch an existing table, so each is added here when missing. Idempotent and
+# cheap: one PRAGMA per table on connect.
+_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "orders": [
+        ("expires_at", "TEXT"), ("take_profit", "REAL"), ("stop_loss", "REAL"),
+        ("trail_pct", "REAL"), ("trail_amount", "REAL"),
+        ("triggered", "INTEGER NOT NULL DEFAULT 0"), ("peak_price", "REAL"),
+        ("rested", "INTEGER NOT NULL DEFAULT 0"),
+        ("post_only", "INTEGER NOT NULL DEFAULT 0"),
+        ("reduce_only", "INTEGER NOT NULL DEFAULT 0"), ("display_qty", "REAL"),
+        ("allow_extended", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "fills": [("fx_rate", "REAL NOT NULL DEFAULT 1")],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _MIGRATIONS.items():
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def close_thread_connections() -> None:

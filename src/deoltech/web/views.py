@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from ..analytics import MIN_TRADES, analyze, by_symbol
+from ..analytics import MIN_TRADES, analyze, by_symbol, financing_from_ledger
 from ..auth import (
     AuthError, PermissionDenied, Role, active_sessions, change_own_password,
     create_api_token, create_user, delete_user, generate_password, list_api_tokens,
@@ -162,7 +162,8 @@ def dashboard(request: Request) -> Response:
         '<div id="equity-host" class="h-spark"></div>',
         subtitle="account value over time")
 
-    perf = analyze(broker.equity_curve, broker.fills)
+    perf = analyze(broker.equity_curve, broker.fills,
+                   financing=financing_from_ledger(broker.portfolio.ledger))
     verdict = card("Performance read", f"""
         <p class="mb-head">{esc(perf.verdict())}</p>
         <div class="kv"><span class="k">Closed trades</span>
@@ -533,7 +534,8 @@ def analytics_page(request: Request) -> Response:
     broker = request.app.platform.service.broker(request.account_id)
     perf = analyze(broker.equity_curve, broker.fills,
                    strategies={o.id: o.strategy for o in broker.orders.values()
-                               if o.strategy})
+                               if o.strategy},
+                   financing=financing_from_ledger(broker.portfolio.ledger))
     caveats = "".join(alert(c, "warn") for c in perf.caveats)
 
     def row(k: str, v: str, cls: str = "") -> str:
@@ -585,7 +587,9 @@ def analytics_page(request: Request) -> Response:
 
     costs = card("Costs", "".join([
         row("Gross P&L", signed(perf.gross_pnl), pnl_class(perf.gross_pnl)),
-        row("Fees paid", money(perf.total_fees), "down"),
+        row("Execution fees", money(perf.execution_fees), "down"),
+        row("Financing (swap, borrow)", money(perf.financing_costs), "down"),
+        row("Total costs", money(perf.total_fees), "down"),
         row("Net P&L", signed(perf.net_pnl), pnl_class(perf.net_pnl)),
         row("Fees as % of gross", f"{money(perf.fees_pct_of_gross, 1)}%"),
     ]) + '<p class="hint mt-md">Costs are the difference '

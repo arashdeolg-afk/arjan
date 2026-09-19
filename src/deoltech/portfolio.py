@@ -298,9 +298,15 @@ class Portfolio:
             inst = resolve(pos.symbol)
             px = self.price_of(pos.symbol) or pos.avg_price
             rate = inst.maintenance_margin
+            if rate <= 0 and inst.max_leverage > 1.0:
+                rate = 1.0 / inst.max_leverage
+            # A cash (1x) instrument was paid for in full. Nothing was
+            # borrowed against it, so there is nothing to maintain and it can
+            # never be the cause of a margin call. Counting its full value here
+            # meant a max-sized crypto buy tripped a call the moment the fee
+            # landed, and was force-liquidated on the next tick.
             if rate <= 0:
-                # A cash instrument still ties up its full value.
-                rate = 1.0 / max(1.0, inst.max_leverage)
+                continue
             total += inst.notional(abs(pos.qty), px) * rate * self.fx_rate(inst.quote_ccy)
         return total
 

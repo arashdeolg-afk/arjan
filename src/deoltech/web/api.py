@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..analytics import analyze, by_symbol
+from ..analytics import analyze, by_symbol, financing_from_ledger
 from ..clock import market_status
 from ..engine.book import build_book
 from ..engine.fees import compute_fees
@@ -138,7 +138,8 @@ def blotter(request: Request) -> Response:
 def performance(request: Request) -> Response:
     request.user.require("view.analytics")
     broker = request.app.platform.service.broker(request.account_id)
-    perf = analyze(broker.equity_curve, broker.fills)
+    perf = analyze(broker.equity_curve, broker.fills,
+                   financing=financing_from_ledger(broker.portfolio.ledger))
     return Response.json({
         "performance": perf.to_dict(),
         "by_symbol": by_symbol(broker.fills),

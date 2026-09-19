@@ -106,7 +106,10 @@ def reconstruct_trades(fills: list[Fill],
             lot = book[0]
             take = min(remaining, abs(lot["qty"]))
             direction = 1.0 if lot["qty"] > 0 else -1.0
-            gross = (f.price - lot["price"]) * take * direction * inst.multiplier
+            # Convert from the quote currency using the rate stamped on the
+            # exit fill; fees are already in the account currency.
+            gross = ((f.price - lot["price"]) * take * direction
+                     * inst.multiplier * (f.fx_rate or 1.0))
             fees = take * (lot["fee_per_unit"] + fee_per_unit)
             trips.append(RoundTrip(
                 symbol=sym,
@@ -272,7 +275,9 @@ class Performance:
     day_trades: int = 0
 
     # Costs
-    total_fees: float = 0.0
+    total_fees: float = 0.0          # execution fees + financing
+    execution_fees: float = 0.0      # commissions, exchange, regulatory
+    financing_costs: float = 0.0     # FX swap and short borrow
     fees_pct_of_gross: float = 0.0
     gross_pnl: float = 0.0
     net_pnl: float = 0.0
@@ -304,11 +309,24 @@ class Performance:
         return d
 
 
+def financing_from_ledger(ledger) -> float:
+    """Total swap and borrow charged, from the cash ledger. Positive is a cost."""
+    return -sum(e.amount for e in ledger if e.kind in ("swap", "borrow"))
+
+
 def analyze(curve: list[EquityPoint], fills: list[Fill], *,
             asset_class: str = "equity",
-            strategies: dict[str, str] | None = None) -> Performance:
-    """Turn an equity curve and a fill history into a performance record."""
+            strategies: dict[str, str] | None = None,
+            financing: float = 0.0) -> Performance:
+    """Turn an equity curve and a fill history into a performance record.
+
+    `financing` is the swap and borrow charged over the period. It lives in
+    the cash ledger rather than on any fill, so a report built from fills
+    alone silently omits it — which makes a carry-negative FX short or a
+    hard-to-borrow equity short look cheaper than it was.
+    """
     perf = Performance()
+    perf.financing_costs = round(max(0.0, financing), 4)
     trips = reconstruct_trades(fills, strategies)
     perf.trades = len(trips)
 
@@ -377,8 +395,10 @@ def analyze(curve: list[EquityPoint], fills: list[Fill], *,
             float("inf") if gross_win > 0 else 0.0)
         perf.expectancy = round(statistics.fmean(pnls), 4)
 
-        perf.total_fees = round(sum(t.fees for t in trips), 4)
-        perf.net_pnl = round(sum(pnls), 4)
+        perf.execution_fees = round(sum(t.fees for t in trips), 4)
+        perf.total_fees = round(perf.execution_fees + perf.financing_costs, 4)
+        # Financing is a real drag on the result, so it comes out of net.
+        perf.net_pnl = round(sum(pnls) - perf.financing_costs, 4)
         perf.gross_pnl = round(perf.net_pnl + perf.total_fees, 4)
         if perf.gross_pnl > 0:
             perf.fees_pct_of_gross = round(perf.total_fees / perf.gross_pnl * 100, 2)

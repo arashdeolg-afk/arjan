@@ -297,8 +297,10 @@ def _as_dt(value: object, index: int = 0) -> datetime:
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
-        # Last resort: space the bars a day apart so ordering still holds.
-        return utcnow() - timedelta(days=index)
+        # Last resort: a monotonic stand-in so the series still sorts in the
+        # order the vendor sent it. `now - index` ran BACKWARDS with the index
+        # and reversed the whole series when it kicked in.
+        return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(days=index)
 
 
 def parse_series(payload: object, symbol: str, interval: str = "1d") -> list[Bar]:

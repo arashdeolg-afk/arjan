@@ -397,11 +397,14 @@ class WebApp:
                 return self.error_handler(request, HttpError(status, message))
             except Exception:                          # noqa: BLE001
                 pass
+        # No inline style: the CSP forbids it, and an error page that
+        # renders unstyled because of the site's own policy is a bad look.
         return Response.html(
             f"<!doctype html><meta charset=utf-8><title>{status}</title>"
-            f"<body style='font-family:system-ui;padding:3rem;max-width:40rem;"
-            f"margin:auto'><h1>{status}</h1><p>{_escape(message)}</p>"
-            f"<p><a href='/'>Back to Deol Tech</a></p></body>", status)
+            f"<link rel='stylesheet' href='/static/app.css'>"
+            f"<body class='error-page'><main><h1>{status}</h1>"
+            f"<p>{_escape(message)}</p>"
+            f"<p><a href='/'>Back to Deol Tech</a></p></main></body>", status)
 
 
 def _escape(text: str) -> str:

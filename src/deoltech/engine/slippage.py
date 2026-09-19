@@ -71,7 +71,11 @@ class SlippageModel:
 
     def impact_bps(self, inst: Instrument, qty: float, quote: Quote) -> float:
         """Square-root market impact, in basis points."""
-        adv = quote.volume if quote.volume > 0 else inst.adv
+        # The quote's volume is the session SO FAR — at 10am it is a fraction
+        # of a day. Dividing by it overstated participation, and therefore
+        # impact, for every trade before the close. The catalog ADV is the
+        # honest denominator; an unusually heavy day can only raise it.
+        adv = max(inst.adv, quote.volume)
         if adv <= 0 or qty <= 0:
             return 0.0
         participation = min(1.0, abs(qty) / adv)
@@ -120,11 +124,16 @@ class SlippageModel:
 
 
 def walk_the_book(book: BookState, inst: Instrument, side: Side, qty: float,
-                  levels: int = 8) -> tuple[float, float]:
+                  levels: int = 8, price_cap: float | None = None
+                  ) -> tuple[float, float]:
     """Volume-weighted price for consuming `qty` across the synthetic ladder.
 
     Returns (vwap, filled_qty). Used for orders larger than the touch, where a
-    single-price fill would understate the cost badly.
+    single-price fill would understate the cost badly. A `price_cap` is a
+    limit order's worst acceptable price: levels beyond it are not consumed,
+    because size resting at a worse price is not size the order can take —
+    walking past the cap and then charging the cap price handed a limit order
+    liquidity that did not exist at its price.
     """
     from .book import depth_ladder
     bids, asks = depth_ladder(book, inst, levels)
@@ -133,6 +142,10 @@ def walk_the_book(book: BookState, inst: Instrument, side: Side, qty: float,
     remaining, cost, filled = abs(qty), 0.0, 0.0
     for price, size in ladder:
         if remaining <= 1e-12:
+            break
+        if price_cap is not None and (
+                price > price_cap + 1e-12 if side is Side.BUY
+                else price < price_cap - 1e-12):
             break
         take = min(remaining, size)
         cost += take * price

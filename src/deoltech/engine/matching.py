@@ -90,11 +90,14 @@ class Matcher:
 
     def __init__(self, slippage: SlippageModel | None = None,
                  fee_fn: FeeFn = _zero_fee, *,
+                 fx_rate_fn: Callable[[str], float] | None = None,
                  require_trade_through: bool = True,
                  max_book_levels: int = 8,
                  allow_closed_session_fills: bool = False):
         self.slippage = slippage or SlippageModel()
         self.fee_fn = fee_fn
+        # Quote currency -> account currency, stamped onto every fill.
+        self.fx_rate_fn = fx_rate_fn or (lambda ccy: 1.0)
         # Conservative maker fills. Turning this off assumes you are always at
         # the front of the queue, which you are not.
         self.require_trade_through = require_trade_through
@@ -172,7 +175,7 @@ class Matcher:
         else:
             # Bigger than what is displayed: walk the ladder for a real VWAP.
             vwap, filled = walk_the_book(book, inst, order.side, want,
-                                         self.max_book_levels)
+                                         self.max_book_levels, price_cap=price_cap)
             if filled <= 0:
                 return 0.0, 0.0
             want = min(want, filled)
@@ -210,6 +213,7 @@ class Matcher:
             price=price, ts=ctx.ts, fee=fee, liquidity=liquidity,
             slippage_bps=round(slip_bps, 4), reference_price=ref,
             venue="deoltech-paper",
+            fx_rate=self.fx_rate_fn(inst.quote_ccy),
         )
 
     # ----------------------------------------------------------------- entry
@@ -363,13 +367,22 @@ class Matcher:
                 order, ctx, want, price, Liquidity.TAKER, reference=bar.close)])
 
         if order.needs_trigger and not order.triggered:
-            self._update_trailing_bar(order, inst, bar)
+            if otype is OrderType.TRAILING_STOP and order.stop_price is None:
+                # Arm from the open: the order went live before this bar, so
+                # the open is the first price it can have seen.
+                self._update_trailing_bar(order, inst, bar, reference=bar.open)
             stop = order.stop_price
             if stop is None:
                 return MatchResult()
             hit = (bar.high >= stop - 1e-12 if order.side is Side.BUY
                    else bar.low <= stop + 1e-12)
             if not hit:
+                # Ratchet only AFTER testing the stop that was in force. A
+                # bar's extreme is known once the bar has completed; letting
+                # it raise the stop and then testing the same bar's other
+                # extreme against the raised level elects the order at a
+                # price it could not have held when that low printed.
+                self._update_trailing_bar(order, inst, bar)
                 return MatchResult()
             order.triggered = True
             if otype in (OrderType.STOP, OrderType.TRAILING_STOP):
@@ -389,6 +402,22 @@ class Matcher:
         limit = order.limit_price
         if limit is None:
             return MatchResult()
+
+        # A limit that is marketable at the bar's open is a TAKER: it crosses
+        # the spread at the open and is capped at its limit, exactly as the
+        # live path treats a marketable limit. Filling it at the limit price
+        # would invent a print — possibly above the bar's entire range — and
+        # charge maker fees for an order that took liquidity. Only an order
+        # that has already rested a bar is filled passively.
+        marketable = (limit >= bar.open - 1e-12 if order.side is Side.BUY
+                      else limit <= bar.open + 1e-12)
+        if marketable and not order.rested:
+            price = self._apply_bar_slippage(order, inst, bar.open, quote)
+            price = min(price, limit) if order.side is Side.BUY else max(price, limit)
+            return MatchResult(fills=[self._make_fill(
+                order, ctx, want, price, Liquidity.TAKER, reference=bar.open)])
+
+        order.rested = True
         through = (bar.low < limit - 1e-12 if order.side is Side.BUY
                    else bar.high > limit + 1e-12)
         if not through:
@@ -408,11 +437,14 @@ class Matcher:
         return self.slippage.apply(inst, order.side, order.remaining, crossed,
                                    quote, order.id).price
 
-    def _update_trailing_bar(self, order: Order, inst: Instrument, bar: Bar) -> None:
+    def _update_trailing_bar(self, order: Order, inst: Instrument, bar: Bar,
+                             reference: float | None = None) -> None:
         if order.order_type is not OrderType.TRAILING_STOP:
             return
-        # Trail from the bar's favourable extreme — the best price it reached.
-        extreme = bar.high if order.side is Side.SELL else bar.low
+        # Trail from the bar's favourable extreme — the best price it reached —
+        # unless the caller names the price to arm from.
+        extreme = (reference if reference is not None
+                   else bar.high if order.side is Side.SELL else bar.low)
         if order.peak_price is None:
             order.peak_price = extreme
         if order.side is Side.SELL:

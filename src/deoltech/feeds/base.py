@@ -350,6 +350,7 @@ class CompositeFeed(Feed):
     def get_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         out: dict[str, Quote] = {}
         remaining = [s.upper() for s in symbols]
+        used_fallback = False
         for i, feed in enumerate(self.feeds):
             if not remaining:
                 break
@@ -363,9 +364,13 @@ class CompositeFeed(Feed):
                 continue
             if got:
                 self.last_used = feed.name
-                self.degraded = self.degraded or i > 0
+                used_fallback = used_fallback or i > 0
             out.update(got)
             remaining = [s for s in remaining if s not in out]
+        # Set fresh each call. OR-ing into the old value made "degraded" a
+        # one-way latch: once the live feed hiccupped, the platform reported
+        # simulated prices forever, even after it had fully recovered.
+        self.degraded = used_fallback
         return out
 
     def get_bars(self, symbol: str, interval: str = "1d", limit: int = 200) -> list[Bar]:

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from . import __version__
 from .accounts import AccountService, create_account, default_account, list_accounts
-from .analytics import analyze
+from .analytics import analyze, financing_from_ledger
 from .auth import (
     AuthError, Role, bootstrap_admin, create_user, find_user, generate_password,
     list_users, reset_password,
@@ -342,7 +342,8 @@ def cmd_demo(args) -> int:
         from .accounts import save_equity_point
         save_equity_point(conn, account_id, point)
 
-    perf = analyze(broker.equity_curve, broker.fills)
+    perf = analyze(broker.equity_curve, broker.fills,
+                   financing=financing_from_ledger(broker.portfolio.ledger))
     _rule("Demo account seeded")
     print(f"  user            {user.username}")
     print(f"  account         #{account_id}")
