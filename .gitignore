@@ -8,7 +8,9 @@ venv/
 
 # Local data: your real numbers stay off GitHub
 data/*.db
-data/*.db-journal
+data/pmpaper.db
+data/*.db
+data/pmpaper.db-journal
 data/*.sqlite3
 out/
 .env

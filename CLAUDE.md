@@ -1,12 +1,16 @@
 # Working in this repo
 
-This repository holds **two unrelated products**. Read the section for the one
-you are touching; their constraints differ in places.
+This repository holds **three unrelated products**. Read the section for the
+one you are touching; their constraints differ in places. They share only the
+repo and the stdlib-only rule — do not couple them.
 
-- **`src/deoltech/`** — Deol Tech, a paper trading platform. See "Deol Tech"
-  below and `docs/DEOLTECH.md`.
-- **`src/revops/`** — the revenue tracker described in the rest of this file.
+- **`src/revops/`** — the revenue tracker described in the next section.
+- **`src/deoltech/`** — Deol Tech, a paper trading platform for stocks, crypto
+  and forex. See "Deol Tech" below and `docs/DEOLTECH.md`.
+- **`src/pmpaper/`** — a Polymarket paper-trading harness. See "pmpaper" below
+  and `docs/POLYMARKET.md`.
 
+## revops
 
 `revops` is a revenue tracker for Arjan's AI-content studio. It exists to
 answer: what earned, what didn't, and what's unlocked but unused.
@@ -152,5 +156,28 @@ python3 -m deoltech admin create        # first administrator
 python3 -m deoltech serve               # http://127.0.0.1:8000
 python3 -m deoltech probe               # is Finviz reachable and parsing?
 python3 -m deoltech demo                # seed a demo account from replayed history
-python3 -m unittest discover -s tests   # 227 tests
+python3 -m unittest discover -s tests   # 274 tests across all three products
 ```
+
+---
+
+# pmpaper (`src/pmpaper/`)
+
+A paper-trading harness for Polymarket binaries (`src/pmpaper/`, docs in
+`docs/POLYMARKET.md`). Its purpose is to *refuse* to confirm edges that
+aren't there, so the conservative behaviour is the feature, not a bug.
+
+- **Costs are mandatory.** Spread, latency, and fees are all modelled. A
+  decision made on the book at time t fills against the book at t+latency;
+  an order landing after its window closes is not a fill. Never "simplify"
+  any of these away — each one alone makes a coin flip look profitable.
+- **Validate before trusting.** `python3 -m pmpaper validate` checks the
+  harness against a synthetic market with a known injected edge. It must
+  pass all five checks, including that it does NOT flag a real-but-small
+  edge as significant. If you change the fill model or stats, re-run it.
+- **Statistical tolerances, not flat ones.** Comparisons against theory use
+  a multiple-of-standard-error bound. An early version of the self-check
+  used a flat tolerance and failed on a correct implementation.
+- **Network is often blocked.** `feeds.py` splits `fetch_*` (IO) from
+  `parse_*` (pure) so parsers stay unit-testable without a live venue.
+  Tests must never hit the network.
