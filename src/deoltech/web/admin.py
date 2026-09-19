@@ -13,6 +13,8 @@ operational needs without creating a way to trade as someone else.
 
 from __future__ import annotations
 
+from .. import __version__
+
 import json
 from datetime import datetime, timezone
 
@@ -435,6 +437,8 @@ def system_page(request: Request) -> Response:
     hours, remainder = divmod(int(uptime.total_seconds()), 3600)
 
     system = card("System", f"""
+      <div class="kv"><span class="k">Version</span>
+        <span class="v">Deol Tech {esc(__version__)}</span></div>
       <div class="kv"><span class="k">Uptime</span>
         <span class="v">{hours}h {remainder // 60}m</span></div>
       <div class="kv"><span class="k">Database</span>

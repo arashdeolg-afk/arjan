@@ -8,6 +8,9 @@ the navigation, because a hidden link is not a permission check.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 from datetime import datetime, timedelta, timezone
 
 from ..analytics import MIN_TRADES, analyze, by_symbol, financing_from_ledger
@@ -20,7 +23,9 @@ from ..backtest import Backtester
 from ..clock import market_status
 from ..db import audit, audit_trail, get_setting, set_setting, stats
 from ..engine.fees import round_trip_cost_bps
-from ..instruments import AssetClass, DEFAULT_WATCHLIST, catalog, resolve, search
+from ..instruments import (
+    AssetClass, DEFAULT_WATCHLIST, catalog, is_valid_symbol, resolve, search,
+)
 from ..strategies import available as available_strategies, get as get_strategy
 from ..types import OrderType, Side, TimeInForce
 from .server import HttpError, Request, Response
@@ -212,7 +217,8 @@ def _market_clock_card() -> str:
 def terminal(request: Request) -> Response:
     platform = request.app.platform
     service = platform.service
-    symbol = resolve(request.query.get("symbol", "AAPL")).symbol
+    wanted = request.query.get("symbol", "AAPL")
+    symbol = resolve(wanted if is_valid_symbol(wanted) else "AAPL").symbol
     inst = resolve(symbol)
     interval = request.query.get("interval", "1d")
     if interval not in ("5m", "15m", "1h", "1d", "1w"):
@@ -453,7 +459,7 @@ def positions_page(request: Request) -> Response:
                for p in rows],
               empty="No open positions.", body_id="positions-body",
               numeric={3, 4, 5, 6, 7, 8, 9, 10}),
-        flush=True)
+        actions=_export_link("positions"), flush=True)
     return shell(request, "Positions", body, "/positions")
 
 
@@ -462,16 +468,21 @@ def orders_page(request: Request) -> Response:
     service.refresh(request.account_id)
     broker = service.broker(request.account_id)
     history = broker.order_history(300)
+    csrf = request.app.csrf_token(request.session_token)
+    can_trade = request.user.can("trade.submit")
 
     rows = []
     for o in history:
         price = o.limit_price or o.stop_price
         kind = {"filled": "up", "rejected": "down", "canceled": "neutral",
                 "expired": "neutral"}.get(o.status.value, "accent")
-        action = (f'<button class="btn btn-sm btn-danger" data-cancel="{esc(o.id)}">'
+        action = (_replace_form(o, csrf) if o.is_open and can_trade else
+                  f'<button class="btn btn-sm btn-danger" data-cancel="{esc(o.id)}">'
                   f'Cancel</button>' if o.is_open else "")
+        lineage = (f' <span class="faint fs-sm">replaces {esc(o.replaces)}</span>'
+                   if o.replaces else "")
         rows.append([
-            f'<span class="mono faint">{esc(o.id)}</span>',
+            f'<span class="mono faint">{esc(o.id)}</span>{lineage}',
             f'<a href="/terminal?symbol={esc(o.symbol)}">{esc(o.symbol)}</a>',
             badge(o.side.value, "up" if o.side is Side.BUY else "down"),
             esc(o.order_type.value), esc(o.tif.value),
@@ -489,8 +500,124 @@ def orders_page(request: Request) -> Response:
         table(["ID", "Symbol", "Side", "Type", "TIF", "Qty", "Price", "Filled",
                "Avg fill", "Status", "Note", ""], rows,
               empty="No orders yet.", numeric={5, 6, 7, 8}),
-        subtitle=f"{len(history)} orders", flush=True)
+        subtitle=f"{len(history)} orders", actions=_export_link("orders"),
+        flush=True)
     return shell(request, "Orders", body, "/orders")
+
+
+def _replace_form(o, csrf: str) -> str:
+    """Inline cancel/replace for a working order. Blank fields keep their
+    current value; the remainder carries over unless a new quantity is given."""
+    inst = resolve(o.symbol)
+    fields = [f'<input type="number" name="qty" step="any" min="0" '
+              f'placeholder="qty {esc(inst.fmt_qty(o.remaining))}" '
+              f'aria-label="New quantity">']
+    if o.order_type is OrderType.TRAILING_STOP:
+        fields.append(f'<input type="number" name="trail_pct" step="any" min="0" '
+                      f'placeholder="trail {esc(money(o.trail_pct or 0, 2))}%" '
+                      f'aria-label="New trail percentage">')
+    else:
+        if o.limit_price is not None:
+            fields.append(f'<input type="number" name="limit_price" step="any" min="0" '
+                          f'placeholder="limit {esc(inst.fmt_price(o.limit_price))}" '
+                          f'aria-label="New limit price">')
+        if o.stop_price is not None:
+            fields.append(f'<input type="number" name="stop_price" step="any" min="0" '
+                          f'placeholder="stop {esc(inst.fmt_price(o.stop_price))}" '
+                          f'aria-label="New stop price">')
+    return (f'<form method="post" action="/orders/{esc(o.id)}/replace" '
+            f'class="replace-form">'
+            f'<input type="hidden" name="csrf_token" value="{esc(csrf)}">'
+            + "".join(fields) +
+            f'<button class="btn btn-sm" type="submit">Replace</button>'
+            f'<button class="btn btn-sm btn-danger" type="button" '
+            f'data-cancel="{esc(o.id)}">Cancel</button></form>')
+
+
+def replace_order_action(request: Request) -> Response:
+    """The orders page's replace form: same handler as the API, flashed."""
+    from . import api as api_views, flash
+    try:
+        data = json.loads(api_views.replace_order(request).body)
+    except HttpError as e:
+        flash.put(request.session_token, e.message, "error")
+        return Response.redirect("/orders")
+    if data["status"] == "rejected":
+        flash.put(request.session_token,
+                  f"Replacement refused: {data['reject_reason']}. "
+                  f"The original order {data['replaced']} is still working.",
+                  "error")
+    else:
+        flash.put(request.session_token,
+                  f"Order {data['replaced']} replaced by {data['id']} "
+                  f"({data['status'].replace('_', ' ')}).", "ok")
+    return Response.redirect("/orders")
+
+
+# ------------------------------------------------------------- CSV export
+
+
+def csv_safe(value):
+    """Neutralise spreadsheet formula injection.
+
+    A tag of `=HYPERLINK(...)` or `+cmd|' /C calc'!A0` is data here and a
+    formula in Excel. Prefixing an apostrophe makes the cell text; numbers
+    and empty cells pass through untouched.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
+_EXPORTS = {
+    "positions": (
+        ["symbol", "asset_class", "side", "qty", "avg_price", "last",
+         "market_value", "unrealized_pnl", "unrealized_pct", "realized_pnl",
+         "fees", "lots", "opened_at"],
+        lambda broker: broker.portfolio.position_rows()),
+    "orders": (
+        ["id", "created_at", "updated_at", "symbol", "side", "order_type",
+         "tif", "qty", "limit_price", "stop_price", "trail_pct", "status",
+         "filled_qty", "avg_fill_price", "fees_paid", "reject_reason",
+         "expires_at", "take_profit", "stop_loss", "parent_id", "oco_group",
+         "replaces", "strategy", "tag"],
+        lambda broker: [o.to_row() for o in broker.order_history(10_000)]),
+    "fills": (
+        ["ts", "order_id", "symbol", "side", "qty", "price", "notional",
+         "fee", "liquidity", "slippage_bps"],
+        lambda broker: broker.blotter(100_000)),
+}
+
+
+def _export_link(kind: str) -> str:
+    return f'<a class="btn btn-sm" href="/export/{kind}.csv">Export CSV</a>'
+
+
+def export_csv(request: Request) -> Response:
+    """Download positions, orders or fills as a spreadsheet-ready CSV."""
+    kind = request.params["kind"]
+    if kind not in _EXPORTS:
+        raise HttpError(404, "No such export.")
+    columns, rows_of = _EXPORTS[kind]
+    service = request.app.platform.service
+    if kind != "fills":
+        service.refresh(request.account_id)
+    rows = rows_of(service.broker(request.account_id))
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([csv_safe(row.get(c)) for c in columns])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return Response(
+        body=buf.getvalue().encode("utf-8"),
+        content_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="deoltech-{kind}-{stamp}.csv"',
+                 "Cache-Control": "no-store"})
 
 
 def blotter_page(request: Request) -> Response:
@@ -523,7 +650,8 @@ def blotter_page(request: Request) -> Response:
                 f'{money(r["slippage_bps"], 2)} bps']
                for r in rows],
               empty="No executions yet.", numeric={4, 5, 6, 7, 9}),
-        subtitle="append-only record of every fill", flush=True)
+        subtitle="append-only record of every fill",
+        actions=_export_link("fills"), flush=True)
     return shell(request, "Blotter", body, "/blotter")
 
 
@@ -631,7 +759,8 @@ def backtest_page(request: Request) -> Response:
     csrf = request.app.csrf_token(request.session_token)
     strategies = available_strategies()
 
-    symbol = resolve(request.get("symbol", "AAPL")).symbol
+    wanted = request.get("symbol", "AAPL")
+    symbol = resolve(wanted if is_valid_symbol(wanted) else "AAPL").symbol
     strategy_name = request.get("strategy", "sma-crossover")
     interval = request.get("interval", "1d")
     limit = max(60, min(1000, request.get_int("limit", 400)))

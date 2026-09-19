@@ -32,7 +32,7 @@ from .engine.fees import FeeSchedule
 from .engine.risk import RiskLimits
 from .engine.slippage import SlippageModel
 from .feeds import Feed, build_feed
-from .instruments import DEFAULT_WATCHLIST, resolve
+from .instruments import DEFAULT_WATCHLIST, resolve, is_valid_symbol
 from .portfolio import CashEntry, Portfolio
 from .types import (
     Fill, Liquidity, Lot, Order, OrderStatus, OrderType, Position, Side,
@@ -204,6 +204,7 @@ def _load_orders(conn: sqlite3.Connection, account_id: int, broker: PaperBroker)
                 display_qty=r["display_qty"], allow_extended=bool(r["allow_extended"]),
                 parent_id=r["parent_id"], oco_group=r["oco_group"],
                 take_profit=r["take_profit"], stop_loss=r["stop_loss"],
+                replaces=r["replaces"],
                 strategy=r["strategy"], tag=r["tag"],
                 client_order_id=r["client_order_id"] or r["id"],
             )
@@ -257,14 +258,15 @@ def save_order(conn: sqlite3.Connection, account_id: int, order: Order) -> None:
                     strategy, tag, parent_id, oco_group, created_at, updated_at,
                     expires_at, take_profit, stop_loss, trail_pct, trail_amount,
                     triggered, peak_price, rested, post_only, reduce_only,
-                    display_qty, allow_extended)
+                    display_qty, allow_extended, replaces)
                VALUES (:id, :account_id, :client_order_id, :symbol, :side, :qty,
                     :order_type, :limit_price, :stop_price, :tif, :status,
                     :filled_qty, :avg_fill_price, :fees_paid, :reject_reason,
                     :strategy, :tag, :parent_id, :oco_group, :created_at,
                     :updated_at, :expires_at, :take_profit, :stop_loss,
                     :trail_pct, :trail_amount, :triggered, :peak_price, :rested,
-                    :post_only, :reduce_only, :display_qty, :allow_extended)
+                    :post_only, :reduce_only, :display_qty, :allow_extended,
+                    :replaces)
                ON CONFLICT(id) DO UPDATE SET
                     status = excluded.status,
                     qty = excluded.qty,
@@ -292,6 +294,27 @@ def save_fill(conn: sqlite3.Connection, account_id: int, fill: Fill) -> None:
             (account_id, fill.order_id, fill.symbol, fill.side.value, fill.qty,
              fill.price, fill.fee, fill.liquidity.value, fill.slippage_bps,
              fill.reference_price, fill.ts.isoformat(), fill.fx_rate))
+
+
+def compact_equity_curve(conn: sqlite3.Connection, account_id: int) -> int:
+    """Drop curve rows that merely repeat the previous row's equity.
+
+    Earlier releases wrote a point on every poll from every open tab, so a
+    quiet account could hold tens of thousands of identical rows per day. The
+    write path now dedupes; this thins what those releases left behind. The
+    first point of every flat run and every point where equity moved are kept,
+    so the curve draws exactly the same. Returns the number of rows removed.
+    """
+    with transaction(conn):
+        cur = conn.execute(
+            """DELETE FROM equity_curve WHERE id IN (
+                   SELECT id FROM (
+                       SELECT id, equity,
+                              LAG(equity) OVER (ORDER BY ts, id) AS prev
+                       FROM equity_curve WHERE account_id = ?)
+                   WHERE prev IS NOT NULL AND abs(equity - prev) < 0.005)""",
+            (account_id,))
+        return cur.rowcount
 
 
 def save_portfolio(conn: sqlite3.Connection, account_id: int,
@@ -385,6 +408,7 @@ class AccountService:
 
             broker = PaperBroker(portfolio, feed=self.feed, fee_schedule=fees,
                                  risk_limits=risk, slippage=SlippageModel())
+            compact_equity_curve(conn, account_id)
             _load_orders(conn, account_id, broker)
             self._brokers[account_id] = broker
             self._ledger_marks[account_id] = len(portfolio.ledger)
@@ -437,6 +461,20 @@ class AccountService:
                               if o.parent_id == placed.id]
         self.persist(account_id, touched, new_fills)
         return placed
+
+    def replace(self, account_id: int, order_id: str, **changes) -> Order | None:
+        """Cancel/replace a working order; persists the original, the
+        successor and any bracket children the successor's fill armed."""
+        broker = self.broker(account_id)
+        before = len(broker.fills)
+        successor = broker.replace(order_id, **changes)
+        if successor is None:
+            return None
+        touched = [o for o in (broker.orders.get(order_id), successor) if o]
+        touched += [o for o in broker.orders.values()
+                    if o.parent_id == successor.id]
+        self.persist(account_id, touched, broker.fills[before:])
+        return successor
 
     def cancel(self, account_id: int, order_id: str) -> bool:
         broker = self.broker(account_id)
@@ -529,6 +567,8 @@ class AccountService:
     def set_watchlist(self, user_id: int, symbols: list[str]) -> list[str]:
         clean, seen = [], set()
         for s in symbols[:100]:
+            if not is_valid_symbol(s):
+                continue
             sym = resolve(s).symbol
             if sym not in seen:
                 seen.add(sym)

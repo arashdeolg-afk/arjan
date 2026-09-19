@@ -19,12 +19,25 @@ from ..engine.book import build_book
 from ..engine.fees import compute_fees
 from ..engine.matching import MatchContext
 from ..feeds.base import FeedError
-from ..instruments import catalog, resolve, search
+from ..instruments import catalog, is_valid_symbol, resolve, search
 from ..strategies import available as available_strategies
 from ..types import Liquidity, Order, OrderType, Side, TimeInForce
 from .server import HttpError, Request, Response
 
 MAX_SYMBOLS_PER_REQUEST = 60
+
+
+def _symbol(raw: str) -> str:
+    """Normalise a caller-supplied symbol, refusing anything that is not one.
+
+    Refusing rather than resolving matters: `resolve` never raises, so a junk
+    string used to become a phantom instrument with made-up specs.
+    """
+    if not raw or not raw.strip():
+        raise HttpError(400, "A symbol is required.")
+    if not is_valid_symbol(raw):
+        raise HttpError(400, f"{raw.strip()[:40]!r} is not a valid symbol.")
+    return resolve(raw).symbol
 
 
 def _quote_dict(q, inst) -> dict:
@@ -44,7 +57,8 @@ def _quote_dict(q, inst) -> dict:
 def quotes(request: Request) -> Response:
     request.user.require("view.market")
     raw = request.query.get("symbols", "")
-    symbols = [resolve(s).symbol for s in raw.split(",") if s.strip()]
+    symbols = [resolve(s).symbol for s in raw.split(",")
+               if s.strip() and is_valid_symbol(s)]
     if not symbols:
         symbols = request.app.platform.service.watchlist(request.user.id)
     symbols = symbols[:MAX_SYMBOLS_PER_REQUEST]
@@ -61,7 +75,7 @@ def quotes(request: Request) -> Response:
 
 def quote_one(request: Request) -> Response:
     request.user.require("view.market")
-    symbol = resolve(request.params["symbol"]).symbol
+    symbol = _symbol(request.params["symbol"])
     inst = resolve(symbol)
     try:
         q = request.app.platform.service.quote(symbol)
@@ -80,7 +94,7 @@ def quote_one(request: Request) -> Response:
 
 def bars(request: Request) -> Response:
     request.user.require("view.market")
-    symbol = resolve(request.query.get("symbol", "AAPL")).symbol
+    symbol = _symbol(request.query.get("symbol", "AAPL"))
     interval = request.query.get("interval", "1d")
     if interval not in ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"):
         interval = "1d"
@@ -151,9 +165,7 @@ def performance(request: Request) -> Response:
 
 def _build_order(request: Request) -> Order:
     """Turn form or JSON input into a validated Order. Raises HttpError(400)."""
-    symbol = resolve(request.get("symbol", "")).symbol
-    if not request.get("symbol", "").strip():
-        raise HttpError(400, "A symbol is required.")
+    symbol = _symbol(request.get("symbol", ""))
     inst = resolve(symbol)
 
     side_raw = request.get("side", "buy").lower()
@@ -267,9 +279,68 @@ def cancel_order(request: Request) -> Response:
     return Response.json({"cancelled": True, "id": request.params["order_id"]})
 
 
+def replace_order(request: Request) -> Response:
+    """Cancel/replace: move a working order's price, size, trail or TIF."""
+    request.user.require("trade.submit")
+    service = request.app.platform.service
+    broker = service.broker(request.account_id)
+    original = broker.orders.get(request.params["order_id"])
+    if original is None or not original.is_open:
+        raise HttpError(404, "That order is not working — it may already have "
+                             "filled or been cancelled.")
+    inst = resolve(original.symbol)
+    changes: dict = {}
+
+    if request.get("qty", "").strip():
+        qty = request.get_float("qty", 0.0)
+        if qty <= 0:
+            raise HttpError(400, "Quantity must be greater than zero.")
+        valid, why = inst.valid_qty(qty)
+        if not valid:
+            raise HttpError(400, f"{inst.symbol}: {why}.")
+        changes["qty"] = inst.round_qty(qty)
+    for name in ("limit_price", "stop_price"):
+        if request.get(name, "").strip():
+            value = request.get_float(name, 0.0)
+            if value <= 0:
+                raise HttpError(400, f"{name.replace('_', ' ')} must be positive.")
+            changes[name] = inst.round_price(value)
+    if request.get("trail_pct", "").strip():
+        trail = request.get_float("trail_pct", 0.0)
+        if trail <= 0:
+            raise HttpError(400, "Trail percentage must be positive.")
+        changes["trail_pct"] = trail
+    if request.get("tif", "").strip():
+        try:
+            changes["tif"] = TimeInForce(request.get("tif").lower())
+        except ValueError:
+            raise HttpError(400, f"Unknown time in force {request.get('tif')!r}.")
+    if not changes:
+        raise HttpError(400, "Nothing to change: give a new quantity, price, "
+                             "trail or time in force.")
+
+    try:
+        successor = service.replace(request.account_id, original.id, **changes)
+    except ValueError as e:
+        raise HttpError(400, str(e))
+    if successor is None:
+        raise HttpError(404, "That order is no longer working.")
+    return Response.json({
+        "replaced": original.id, "original_status": original.status.value,
+        "id": successor.id, "status": successor.status.value,
+        "symbol": successor.symbol, "side": successor.side.value,
+        "order_type": successor.order_type.value, "tif": successor.tif.value,
+        "qty": successor.qty, "limit_price": successor.limit_price,
+        "stop_price": successor.stop_price, "trail_pct": successor.trail_pct,
+        "filled_qty": successor.filled_qty,
+        "avg_fill_price": successor.avg_fill_price,
+        "reject_reason": successor.reject_reason,
+    })
+
+
 def close_position(request: Request) -> Response:
     request.user.require("trade.submit")
-    symbol = resolve(request.params["symbol"]).symbol
+    symbol = _symbol(request.params["symbol"])
     order = request.app.platform.service.close_position(request.account_id, symbol)
     if order is None:
         raise HttpError(404, f"No open position in {symbol}.")
@@ -344,7 +415,7 @@ def preview(request: Request) -> Response:
 
 def max_qty(request: Request) -> Response:
     request.user.require("view.account")
-    symbol = resolve(request.query.get("symbol", "AAPL")).symbol
+    symbol = _symbol(request.query.get("symbol", "AAPL"))
     side = Side(request.query.get("side", "buy").lower()
                 if request.query.get("side", "buy").lower() in ("buy", "sell")
                 else "buy")

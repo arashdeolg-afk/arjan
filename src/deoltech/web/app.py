@@ -355,6 +355,14 @@ def build_app(platform: Platform, *, secret: str = "",
         return Response.redirect("/?ok=" + quote(
             "Paper account reset to its opening balance."))
 
+    @app.post("/orders/<order_id>/replace")
+    def _replace_order(request):
+        return views.replace_order_action(request)
+
+    @app.get("/export/<kind>.csv")
+    def _export(request):
+        return views.export_csv(request)
+
     @app.post("/actions/flatten")
     def _flatten(request):
         request.user.require("trade.submit")
@@ -439,6 +447,7 @@ def build_app(platform: Platform, *, secret: str = "",
     app.get("/api/max-qty")(api_views.max_qty)
     app.post("/api/orders")(api_views.submit_order)
     app.post("/api/orders/<order_id>/cancel")(api_views.cancel_order)
+    app.post("/api/orders/<order_id>/replace")(api_views.replace_order)
     app.post("/api/positions/<symbol>/close")(api_views.close_position)
     app.post("/api/preview")(api_views.preview)
     app.route("/api/watchlist", ("GET", "POST"))(api_views.watchlist)

@@ -235,6 +235,7 @@ class Order:
     oco_group: str | None = None
     take_profit: float | None = None
     stop_loss: float | None = None
+    replaces: str | None = None   # cancel/replace: the order this one succeeded
 
     # Provenance
     strategy: str | None = None
@@ -312,6 +313,7 @@ class Order:
             "tag": self.tag,
             "parent_id": self.parent_id,
             "oco_group": self.oco_group,
+            "replaces": self.replaces,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
             "expires_at": iso(self.expires_at) if self.expires_at else None,

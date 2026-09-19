@@ -557,6 +557,82 @@ class PaperBroker:
             self._cancel_children(order, "parent cancelled")
             return True
 
+    def replace(self, order_id: str, *, qty: float | None = None,
+                limit_price: float | None = None,
+                stop_price: float | None = None,
+                trail_pct: float | None = None,
+                tif: TimeInForce | None = None,
+                expires_at: datetime | None = None) -> Order | None:
+        """Cancel/replace a working order.
+
+        The successor inherits everything not named here — side, type,
+        lineage (parent, OCO group), flags, tag — and takes the original's
+        place. `qty` is the new WORKING quantity; left out, the unfilled
+        remainder carries over. Returns None when nothing is working under
+        that id; raises ValueError for a replacement that cannot be an order.
+
+        Risk is checked on the successor BEFORE the original is cancelled.
+        A refused replacement leaves the original working and is recorded as
+        a rejected order of its own: a trader who asked to move a stop must
+        never find that the stop simply vanished.
+        """
+        with self._lock:
+            original = self.working.get(order_id)
+            if original is None:
+                return None
+            inst = resolve(original.symbol)
+            new_qty = inst.round_qty(qty if qty is not None else original.remaining)
+            if new_qty <= 0:
+                raise ValueError("replacement quantity must be positive")
+            new_tif = tif or original.tif
+            trailing = original.order_type is OrderType.TRAILING_STOP
+            if expires_at is None and new_tif is original.tif and new_tif is not TimeInForce.DAY:
+                expires_at = original.expires_at
+            successor = Order(
+                symbol=original.symbol, side=original.side, qty=new_qty,
+                order_type=original.order_type,
+                limit_price=(limit_price if limit_price is not None
+                             else original.limit_price),
+                # A trailing stop's stop is engine-owned: it re-arms from the
+                # current price rather than inheriting a stale level.
+                stop_price=(None if trailing else
+                            stop_price if stop_price is not None
+                            else original.stop_price),
+                trail_pct=trail_pct if trail_pct is not None else original.trail_pct,
+                trail_amount=None if trail_pct is not None else original.trail_amount,
+                tif=new_tif, expires_at=expires_at,
+                post_only=original.post_only, reduce_only=original.reduce_only,
+                display_qty=original.display_qty,
+                allow_extended=original.allow_extended,
+                parent_id=original.parent_id, oco_group=original.oco_group,
+                take_profit=original.take_profit, stop_loss=original.stop_loss,
+                strategy=original.strategy, tag=original.tag,
+                replaces=original.id,
+            )
+
+            q = self._quote(original.symbol)
+            last = q.last if q else 0.0
+            if q is not None and q.last > 0:
+                self.portfolio.mark({inst.symbol: q.last})
+            decision = self.risk.check(successor, self.portfolio, self.risk_state(),
+                                       last, self.clock())
+            if not decision:
+                successor.created_at = successor.updated_at = self.clock()
+                self.orders[successor.id] = successor
+                self._log("submit", successor, f"replace {original.id}")
+                self._reject(successor, decision.reason, decision.code)
+                self._log("replace-refused", original,
+                          f"{original.id} keeps working: {decision.reason}")
+                return successor
+
+            self._finish(original, OrderStatus.CANCELED,
+                         f"replaced by {successor.id}")
+            if original.parent_id:
+                # A parent's cancel must still reach its child's successor.
+                self._children[original.parent_id].append(successor)
+            self._log("replace", original, f"{original.id} -> {successor.id}")
+            return self.submit(successor, q)
+
     def cancel_all(self, symbol: str | None = None,
                    reason: str = "cancel-all") -> int:
         with self._lock:

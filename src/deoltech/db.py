@@ -159,7 +159,8 @@ CREATE TABLE IF NOT EXISTS orders (
     post_only           INTEGER NOT NULL DEFAULT 0,
     reduce_only         INTEGER NOT NULL DEFAULT 0,
     display_qty         REAL,
-    allow_extended      INTEGER NOT NULL DEFAULT 0
+    allow_extended      INTEGER NOT NULL DEFAULT 0,
+    replaces            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_account ON orders(account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(account_id, status);
@@ -284,6 +285,7 @@ _MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("post_only", "INTEGER NOT NULL DEFAULT 0"),
         ("reduce_only", "INTEGER NOT NULL DEFAULT 0"), ("display_qty", "REAL"),
         ("allow_extended", "INTEGER NOT NULL DEFAULT 0"),
+        ("replaces", "TEXT"),
     ],
     "fills": [("fx_rate", "REAL NOT NULL DEFAULT 1")],
 }

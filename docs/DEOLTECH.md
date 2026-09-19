@@ -166,6 +166,20 @@ taker. This flows straight through to fees, which is the point of `post_only`.
 **Nothing fills in a closed market.** Orders queue for the next session, and a
 DAY order placed at 9pm belongs to tomorrow rather than expiring on arrival.
 
+**A bar is matched before the strategy sees it.** In a backtest the broker runs
+with `defer_matching=True`: `submit()` risk-checks and accepts an order but
+never fills it on the spot, and the driver matches it against the *next* bar.
+A limit that is marketable at that bar's open takes at the open, capped at its
+limit — never at a limit price above the bar's range. A trailing stop is tested
+against the stop that was in force *before* the bar's high is allowed to raise
+it; a bar that runs 100 → 110 → 100.5 cannot elect a 5% trail at 104.5, because
+that stop did not exist until the high had printed.
+
+**A flip through zero is not a reduce.** Long 1 share, sell 2,000 is a
+1,999-share short. Every order is split into the leg that closes existing
+exposure and the leg that opens new exposure, and buying power, shorting,
+concentration and the margin-call gate all see the opening leg.
+
 ### Costs
 
 - **Equities** — zero commission by default, but never free: SEC Section 31
@@ -178,6 +192,15 @@ DAY order placed at 9pm belongs to tomorrow rather than expiring on arrival.
   ¥1,572.
 - **Shorts** — daily borrow at the instrument's rate. Hard-to-borrow names cost
   what they really cost.
+
+Financing rolls once a day at 17:00 ET. The broker compares the last roll it
+charged with the last roll that has occurred and settles every weekday roll in
+between — a process that was down for three days charges three days on
+restart, and one that was up charges each exactly once, resuming from the cash
+ledger. Wednesday's swap and Friday's borrow each carry the weekend. Backtests
+accrue the same financing, and the performance record reports it: `total_fees`
+is `execution_fees` (commissions, exchange and regulatory fees) plus
+`financing_costs` (swap and borrow), and net P&L is charged for both.
 
 Slippage is the square-root law, `Δp/p = η·σ·√(Q/ADV)`, plus a latency term.
 It is **deterministic** given the same inputs, so backtests reproduce and nobody
@@ -394,8 +417,31 @@ GET  /api/max-qty?symbol=&side=      largest permitted size
 POST /api/preview                    cost and risk BEFORE placing
 POST /api/orders                     place an order
 POST /api/orders/<id>/cancel
+POST /api/orders/<id>/replace        cancel/replace a working order
 POST /api/positions/<symbol>/close
+GET  /export/positions.csv           spreadsheet exports (session login)
+GET  /export/orders.csv
+GET  /export/fills.csv
 ```
+
+`/api/orders/<id>/replace` takes any of `qty`, `limit_price`, `stop_price`,
+`trail_pct` and `tif`; whatever is left out keeps its value, and `qty` is the
+new *working* quantity (the unfilled remainder carries over by default). The
+successor inherits the original's side, type, flags, bracket parent and OCO
+group, and records the original's id in `replaces`. Risk is checked on the
+successor *before* the original is cancelled: a refused replacement comes back
+as a rejected order of its own and the original keeps working, so a trader who
+asked to move a stop never finds that the stop simply vanished. The same form
+is inline on the Orders page.
+
+Symbols are validated at the boundary — up to twelve letters and digits with
+an optional class suffix, separators such as `BRK-B` and `BTC/USD` stripped —
+and anything else is a 400. Specs for symbols outside the seeded catalog are
+inferred into a bounded, least-recently-used cache rather than the catalog
+itself, so a scripted caller cannot grow the process without bound.
+
+CSV cells are defused against spreadsheet formula injection: a tag of
+`=HYPERLINK(...)` comes back as text, not as a formula.
 
 `/api/preview` is worth calling out: it returns the estimated fill, the spread
 being crossed, itemized fees, the margin consumed, remaining buying power, and
@@ -457,6 +503,36 @@ deterministic feed or recorded Finviz fixtures) and **no real database**
 The matching-engine tests are the important ones. Each is written so that the
 *optimistic* implementation fails it — a simulator that filled stops at the stop
 price, or let a strategy see the current bar, would go red.
+
+The suite ends with a block of regression tests, one per bug fixed since the
+first release (a backtest that filled a signal at its own close, a flip that
+skipped buying power, a PDT rule that blocked every exit, financing charged
+only when a tick landed inside the 17:00 minute, yen reported as dollars …).
+Every one of them fails against the original code.
+
+---
+
+## What changed in 1.1
+
+- **Cancel/replace** — `POST /api/orders/<id>/replace` and an inline form on
+  the Orders page. Lineage is kept (`replaces`) and survives a restart.
+- **CSV export** of positions, orders and fills, defused against formula
+  injection.
+- **Bounded catalog** — junk symbols are refused with a 400 rather than
+  minted into phantom instruments; inferred specs live in an LRU cache.
+- **Equity-curve compaction** — a point is written when equity moves or every
+  fifteen minutes, not on every poll; rows left by earlier releases are thinned
+  on load without changing the curve.
+- **Twenty engine, matching, analytics and persistence fixes**, each with a
+  regression test. The ones that change results: backtests no longer fill a
+  signal on the bar that produced it; a flip through zero is risk-checked as
+  the short it is; the PDT rule blocks only the fourth *day* trade; a fully
+  paid position can no longer be margin-called by its own fee; financing is
+  charged for every roll, once, and reported; round-trip P&L in a non-USD
+  quote currency is converted; a marketable bar limit takes at the open; a
+  trailing stop cannot be elected by a level its own bar created; impact uses
+  daily ADV rather than the session so far; and order state (expiry, trail,
+  election, maker status, brackets) survives a restart.
 
 ---
 

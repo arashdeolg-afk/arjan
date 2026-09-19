@@ -83,12 +83,27 @@ Each has a test written so the optimistic implementation fails it.
   price. `matching.match_bar` takes the *worse* of the stop and the bar's open.
 - **No lookahead.** A signal from a bar's close fills at the next bar's open.
   The backtest loop in `backtest.py` matches orders *before* showing the
-  strategy the bar; do not reorder those steps.
+  strategy the bar; do not reorder those steps. The backtester's broker runs
+  with `defer_matching=True` so `submit()` never fills on the spot — keep it.
+  A trailing stop on a bar is tested against the stop in force *before* the
+  bar's extreme ratchets it.
+- **A flip through zero is not a reduce.** `RiskEngine.check` splits every
+  order into a closing leg and an opening leg; each check sees the opening
+  leg. Long 1, sell 2,000 is a 1,999-share short and must fund itself.
 - **Limits fill at the limit**, never at the bar's favourable extreme.
 - **Resting limits need the market to trade through them**, and fill as makers
   at their own price.
 - **Costs are always charged** — spread, slippage, commission, regulatory fees,
-  swap, borrow. A backtest with fees switched off is not a result.
+  swap, borrow. A backtest with fees switched off is not a result. Financing
+  settles every weekday 17:00 ET roll exactly once (`_accrue_financing`
+  catches up from the ledger after a restart) and reaches the report through
+  `analyze(..., financing=financing_from_ledger(ledger))`; a report built from
+  fills alone silently omits it.
+- **Symbols are validated at the boundary.** `resolve()` never raises, so the
+  web layer must refuse junk first (`is_valid_symbol`, `api._symbol`).
+  Inferred specs go in the bounded `_INFERRED` cache, never into `_CATALOG`.
+- **A refused replacement leaves the original working.** `PaperBroker.replace`
+  risk-checks the successor before cancelling; keep that order of operations.
 - **Median beside mean, always.** Same house rule as revops: trade P&L is
   fat-tailed. `MIN_TRADES = 20` gates per-trade statistics, and annualized
   figures are suppressed under 30 days of history.
@@ -107,6 +122,8 @@ Each has a test written so the optimistic implementation fails it.
   no rendered page contains one.
 - **Credentials never enter a URL.** Use `web/flash.py`, not `?ok=`. A secret
   in a query string is a secret in the access log and the browser history.
+- **CSV cells go through `csv_safe()`.** User-supplied text (tags, notes) can
+  start with `=`, `+`, `-` or `@`; unprefixed it is a formula in Excel.
 - **Anything reaching a header is sanitized.** `http.server` does no CRLF
   filtering at all. Redirect targets go through `safe_redirect_target()`.
 - **API token scopes are enforced**, intersected with the owner's role, in
@@ -135,5 +152,5 @@ python3 -m deoltech admin create        # first administrator
 python3 -m deoltech serve               # http://127.0.0.1:8000
 python3 -m deoltech probe               # is Finviz reachable and parsing?
 python3 -m deoltech demo                # seed a demo account from replayed history
-python3 -m unittest discover -s tests   # 187 tests
+python3 -m unittest discover -s tests   # 227 tests
 ```

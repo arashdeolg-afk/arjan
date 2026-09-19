@@ -228,6 +228,10 @@ input:focus, select:focus, textarea:focus {
 .btn-danger { color: var(--down); border-color: rgba(240,97,109,.4); }
 .btn-danger:hover { background: rgba(240,97,109,.12); }
 .btn-sm { padding: .25rem .5rem; font-size: .72rem; }
+.replace-form { display: inline-flex; gap: .3rem; align-items: center;
+  flex-wrap: wrap; justify-content: flex-end; }
+.replace-form input[type=number] { width: 6.5rem; margin: 0;
+  padding: .25rem .4rem; font-size: .72rem; }
 .btn-block { width: 100%; }
 .btn-row { display: flex; gap: .5rem; flex-wrap: wrap; }
 

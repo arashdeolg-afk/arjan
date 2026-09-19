@@ -2014,3 +2014,271 @@ class TestAuthRegressions(unittest.TestCase):
             auth.login(self.conn, "target", "wrong")
         user, _ = auth.login(self.conn, "target", "T@rgetPass2026!")
         self.assertEqual(user.username, "target")
+
+
+# ============================================================ v1.1 features
+
+
+class TestOrderReplace(unittest.TestCase):
+    def setUp(self):
+        self.feed = SyntheticFeed()
+        self.broker = PaperBroker(
+            Portfolio(starting_cash=100_000), feed=self.feed,
+            risk_limits=RiskLimits(max_position_pct_equity=1.0,
+                                   enforce_pdt=False))
+        self.price = self.feed.get_quote("BTCUSD").last
+
+    def resting(self, **kw):
+        order = self.broker.submit(Order(
+            "BTCUSD", Side.BUY, 0.1, OrderType.LIMIT,
+            limit_price=round(self.price * 0.9, 2), tif=TimeInForce.GTC, **kw))
+        self.assertTrue(order.is_open, order.reject_reason)
+        return order
+
+    def test_replace_moves_the_price_and_keeps_the_lineage(self):
+        original = self.resting(tag="scalp")
+        successor = self.broker.replace(original.id,
+                                        limit_price=round(self.price * 0.92, 2))
+        self.assertIs(original.status, OrderStatus.CANCELED)
+        self.assertIn(successor.id, original.reject_reason)
+        self.assertIn(successor.id, self.broker.working)
+        self.assertNotIn(original.id, self.broker.working)
+        self.assertEqual(successor.replaces, original.id)
+        self.assertEqual(successor.tag, "scalp")
+        self.assertIs(successor.tif, TimeInForce.GTC)
+        self.assertAlmostEqual(successor.limit_price, round(self.price * 0.92, 2))
+        self.assertEqual(successor.qty, 0.1, "the remainder carries over")
+
+    def test_a_refused_replacement_leaves_the_original_working(self):
+        original = self.resting()
+        successor = self.broker.replace(original.id, qty=1_000)  # ~$50m
+        self.assertIs(successor.status, OrderStatus.REJECTED)
+        self.assertTrue(successor.reject_reason)
+        self.assertIn(original.id, self.broker.working)
+        self.assertIs(original.status, OrderStatus.NEW)
+
+    def test_replacing_a_bracket_leg_keeps_its_oco_partner(self):
+        entry = self.broker.submit(Order(
+            "BTCUSD", Side.BUY, 0.1, take_profit=round(self.price * 1.05, 2),
+            stop_loss=round(self.price * 0.97, 2)))
+        self.assertIs(entry.status, OrderStatus.FILLED)
+        stop = next(o for o in self.broker.open_orders("BTCUSD")
+                    if o.order_type is OrderType.STOP)
+        moved = self.broker.replace(stop.id, stop_price=round(self.price * 0.98, 2))
+        self.assertTrue(moved.is_open, moved.reject_reason)
+        self.assertEqual(moved.oco_group, stop.oco_group)
+        self.assertEqual(moved.parent_id, entry.id)
+        self.assertTrue(moved.reduce_only)
+        self.assertEqual(len(self.broker.open_orders("BTCUSD")), 2)
+        group = self.broker._oco[moved.oco_group]
+        self.assertIn(moved.id, group)
+        self.assertNotIn(stop.id, group)
+        # Cancelling the entry's children still reaches the successor.
+        self.broker._cancel_children(entry, "parent cancelled")
+        self.assertFalse(moved.is_open)
+
+    def test_a_replacement_that_is_now_marketable_fills(self):
+        original = self.resting()
+        successor = self.broker.replace(original.id,
+                                        limit_price=round(self.price * 1.01, 2))
+        self.assertIs(successor.status, OrderStatus.FILLED)
+
+    def test_replacing_a_missing_or_finished_order_is_none(self):
+        self.assertIsNone(self.broker.replace("ORD-nope", qty=1))
+        done = self.broker.submit(Order("BTCUSD", Side.BUY, 0.01))
+        self.assertIs(done.status, OrderStatus.FILLED)
+        self.assertIsNone(self.broker.replace(done.id, qty=0.02))
+
+    def test_a_nonsense_replacement_is_an_error_not_a_silent_cancel(self):
+        original = self.resting()
+        with self.assertRaises(ValueError):
+            self.broker.replace(original.id, qty=0.0000001)   # rounds to zero
+        with self.assertRaises(ValueError):
+            self.broker.replace(original.id, tif=TimeInForce.GTD)  # no date
+        self.assertIn(original.id, self.broker.working)
+
+
+class TestSymbolValidation(unittest.TestCase):
+    def test_shapes(self):
+        from deoltech.instruments import is_valid_symbol
+        for ok in ("AAPL", "brk-b", "BRK.B", "BTC/USD", "eurusd", "EURUSD=X",
+                   "SPY", " nvda "):
+            self.assertTrue(is_valid_symbol(ok), ok)
+        for bad in ("", " ", "<script>", "AAPL;DROP", "../../etc", "A" * 20,
+                    "AA PL", "%3Cscript%3E"):
+            self.assertFalse(is_valid_symbol(bad), repr(bad))
+
+    def test_unknown_symbols_do_not_grow_the_catalog(self):
+        from deoltech import instruments
+        before = len(instruments.catalog())
+        for i in range(instruments._INFERRED_LIMIT + 50):
+            instruments.resolve(f"ZZ{i:04d}")
+        self.assertEqual(len(instruments.catalog()), before)
+        self.assertLessEqual(len(instruments._INFERRED), instruments._INFERRED_LIMIT)
+        # Specs stay stable while a symbol is in use.
+        self.assertIs(instruments.resolve("ZZ9999"), instruments.resolve("ZZ9999"))
+        # And the seeded catalog is untouched by any of it.
+        self.assertEqual(instruments.resolve("AAPL").name, "Apple Inc.")
+
+
+class TestCurveCompaction(unittest.TestCase):
+    def setUp(self):
+        from deoltech import accounts, auth, db
+        self.accounts = accounts
+        self.path = os.path.join(_TMPDIR, f"compact-{id(self)}.db")
+        self.conn = db.connect(self.path)
+        user, _ = auth.bootstrap_admin(self.conn, "owner")
+        self.account_id = accounts.create_account(self.conn, user.id, "Main",
+                                                  starting_cash=50_000)
+
+    def test_legacy_duplicate_rows_are_thinned_without_changing_the_curve(self):
+        from deoltech.engine.broker import EquityPoint
+        base = datetime(2026, 1, 5, tzinfo=UTC)
+
+        def point(offset, equity):
+            self.accounts.save_equity_point(
+                self.conn, self.account_id,
+                EquityPoint(base + offset, equity, equity, 0, 0))
+
+        for i in range(200):                       # a poll every 30s, all quiet
+            point(timedelta(seconds=30 * i), 50_000.0)
+        point(timedelta(hours=2), 50_100.0)
+        point(timedelta(hours=3), 50_100.0)
+        point(timedelta(hours=4), 49_950.0)
+        removed = self.accounts.compact_equity_curve(self.conn, self.account_id)
+        self.assertEqual(removed, 200)
+        rows = self.conn.execute(
+            "SELECT equity FROM equity_curve WHERE account_id = ? ORDER BY ts",
+            (self.account_id,)).fetchall()
+        self.assertEqual([r[0] for r in rows], [50_000.0, 50_100.0, 49_950.0])
+        # Idempotent.
+        self.assertEqual(
+            self.accounts.compact_equity_curve(self.conn, self.account_id), 0)
+
+
+class TestWebAppV11(unittest.TestCase):
+    """Round-trips for the v1.1 endpoints. Same request helper as TestWebApp,
+    on a database of its own so the two classes cannot trip over each other."""
+
+    @classmethod
+    def setUpClass(cls):
+        from deoltech.web.app import Platform, build_app
+        cls.path = os.path.join(_TMPDIR, "web-v11.db")
+        os.environ["DEOLTECH_DB"] = cls.path
+        cls.platform = Platform(feed_mode="synthetic")
+        cls.app = build_app(cls.platform, secret="test-secret")
+
+    tearDownClass = TestWebApp.tearDownClass
+    request = TestWebApp.request
+    setUp = TestWebApp.setUp
+
+    def _resting_order(self, factor=0.85):
+        price = json.loads(self.request("/api/quotes/BTCUSD",
+                                        token=self.token).body)["last"]
+        response = self.request("/api/orders", "POST", {
+            "symbol": "BTCUSD", "side": "buy", "qty": "0.01",
+            "order_type": "limit", "limit_price": f"{price * factor:.2f}",
+            "tif": "gtc", "csrf_token": self.csrf}, token=self.token)
+        self.assertEqual(response.status, 200, response.body)
+        placed = json.loads(response.body)
+        self.assertEqual(placed["status"], "new", placed)
+        return placed, price
+
+    def test_replace_round_trip_over_the_api(self):
+        placed, price = self._resting_order()
+        response = self.request(f"/api/orders/{placed['id']}/replace", "POST", {
+            "limit_price": f"{price * 0.87:.2f}", "csrf_token": self.csrf},
+            token=self.token)
+        self.assertEqual(response.status, 200, response.body)
+        data = json.loads(response.body)
+        self.assertEqual(data["replaced"], placed["id"])
+        self.assertEqual(data["original_status"], "canceled")
+        self.assertEqual(data["status"], "new")
+        self.assertAlmostEqual(data["limit_price"], round(price * 0.87, 2), places=2)
+        # The original is gone; replacing it again is a 404.
+        again = self.request(f"/api/orders/{placed['id']}/replace", "POST",
+                             {"qty": "0.02", "csrf_token": self.csrf},
+                             token=self.token)
+        self.assertEqual(again.status, 404)
+        # Nothing to change is a 400, not a silent no-op.
+        empty = self.request(f"/api/orders/{data['id']}/replace", "POST",
+                             {"csrf_token": self.csrf}, token=self.token)
+        self.assertEqual(empty.status, 400)
+        # The orders page offers the form, and shows the lineage.
+        page = self.request("/orders", token=self.token).body.decode()
+        self.assertIn(f'/orders/{data["id"]}/replace', page)
+        self.assertIn(f'replaces {placed["id"]}', page)
+        # A restart keeps the lineage.
+        from deoltech.accounts import default_account
+        from deoltech.auth import session_user
+        service = self.platform.service
+        conn = self.platform.conn()
+        user = session_user(conn, self.token)
+        account_id = default_account(conn, user.id, user.username)
+        service.evict(account_id)
+        reloaded = service.broker(account_id).orders[data["id"]]
+        self.assertEqual(reloaded.replaces, placed["id"])
+
+    def test_replace_from_the_orders_page_flashes_the_outcome(self):
+        placed, price = self._resting_order()
+        response = self.request(f"/orders/{placed['id']}/replace", "POST", {
+            "qty": "0.02", "csrf_token": self.csrf}, token=self.token)
+        self.assertIn(response.status, (302, 303))
+        page = self.request("/orders", token=self.token).body.decode()
+        self.assertIn("replaced by", page)
+
+    def test_csv_exports_download_as_attachments(self):
+        for kind, column in (("positions", "unrealized_pnl"),
+                             ("orders", "limit_price"), ("fills", "slippage_bps")):
+            with self.subTest(kind=kind):
+                response = self.request(f"/export/{kind}.csv", token=self.token)
+                self.assertEqual(response.status, 200)
+                self.assertTrue(response.content_type.startswith("text/csv"))
+                self.assertIn("attachment",
+                              response.headers.get("Content-Disposition", ""))
+                header = response.body.decode("utf-8").splitlines()[0]
+                self.assertIn("symbol", header)
+                self.assertIn(column, header)
+        self.assertEqual(self.request("/export/secrets.csv",
+                                      token=self.token).status, 404)
+        self.assertIn(self.request("/export/orders.csv").status, (302, 303),
+                      "exports require a login")
+
+    def test_csv_cells_cannot_smuggle_formulas(self):
+        from deoltech.web.views import csv_safe
+        self.assertEqual(csv_safe("=1+1"), "'=1+1")
+        self.assertEqual(csv_safe("+cmd|' /C calc'!A0"), "'+cmd|' /C calc'!A0")
+        self.assertEqual(csv_safe("@SUM(A1)"), "'@SUM(A1)")
+        self.assertEqual(csv_safe("AAPL"), "AAPL")
+        self.assertEqual(csv_safe(-1.5), -1.5)
+        self.assertEqual(csv_safe(None), "")
+        # A tagged order really does come back defused.
+        self.request("/api/orders", "POST", {
+            "symbol": "BTCUSD", "side": "buy", "qty": "0.01", "tag": "=HYPERLINK()",
+            "csrf_token": self.csrf}, token=self.token)
+        body = self.request("/export/orders.csv", token=self.token).body.decode()
+        self.assertIn("'=HYPERLINK()", body)
+        self.assertNotIn(",=HYPERLINK()", body)
+
+    def test_junk_symbols_are_refused_not_catalogued(self):
+        from deoltech.instruments import catalog
+        before = len(catalog())
+        for path in ("/api/quotes/%3Cscript%3E", "/api/bars?symbol=../../etc",
+                     "/api/max-qty?symbol=%20", "/api/bars?symbol=AAPL;DROP"):
+            with self.subTest(path=path):
+                response = self.request(path, token=self.token)
+                self.assertEqual(response.status, 400, response.body)
+        response = self.request("/api/orders", "POST", {
+            "symbol": "AAPL;DROP", "side": "buy", "qty": "1",
+            "csrf_token": self.csrf}, token=self.token)
+        self.assertEqual(response.status, 400)
+        self.assertEqual(len(catalog()), before)
+        # The terminal falls back rather than rendering a phantom instrument.
+        page = self.request("/terminal?symbol=%3Cscript%3E", token=self.token)
+        self.assertEqual(page.status, 200)
+        self.assertNotIn(b"<script>", page.body.replace(b"<script src=", b""))
+
+    def test_the_admin_console_reports_the_version(self):
+        from deoltech import __version__
+        page = self.request("/admin/system", token=self.token)
+        self.assertIn(__version__.encode(), page.body)

@@ -13,6 +13,9 @@ into the same box and get the right contract.
 
 from __future__ import annotations
 
+import re
+from collections import OrderedDict
+
 import math
 from dataclasses import dataclass, field
 
@@ -275,16 +278,47 @@ def _infer(symbol: str) -> Instrument:
     return _equity(s, adv=750_000, spread_bps=8.0)
 
 
+# A symbol is a short run of letters and digits, optionally with one dotted
+# class suffix (BRK.B). Separators that vendors use (BRK-B, BTC/USD, EURUSD=X)
+# are stripped first. Anything else is not a ticker, and a resolver that
+# accepts anything memoizes anything: a scripted caller walking /api/quotes
+# with random strings grew the catalog without bound.
+SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,12}(\.[A-Z0-9]{1,3})?$")
+
+# Inferred specs live here, not in the catalog: the catalog lists what was
+# seeded or registered, this remembers what was merely looked up. Bounded and
+# least-recently-used, so an endless stream of unknown symbols costs a fixed
+# amount of memory while anything actually in use keeps a stable spec.
+_INFERRED_LIMIT = 512
+_INFERRED: "OrderedDict[str, Instrument]" = OrderedDict()
+
+
+def normalize_symbol(symbol: str) -> str:
+    return (symbol.upper().strip().replace("/", "").replace("-", "")
+            .replace("=X", ""))
+
+
+def is_valid_symbol(symbol: str) -> bool:
+    """Does this look like a ticker at all? The web layer refuses what does not."""
+    return bool(SYMBOL_RE.match(normalize_symbol(symbol or "")))
+
+
 def resolve(symbol: str) -> Instrument:
     """Look up (or infer) the contract spec for a symbol. Never raises."""
     s = symbol.upper().strip()
     if s in _CATALOG:
         return _CATALOG[s]
-    normalized = s.replace("/", "").replace("-", "")
+    normalized = normalize_symbol(s)
     if normalized in _CATALOG:
         return _CATALOG[normalized]
+    inst = _INFERRED.get(normalized)
+    if inst is not None:
+        _INFERRED.move_to_end(normalized)
+        return inst
     inst = _infer(normalized)
-    _CATALOG[normalized] = inst        # memoize so specs stay stable per process
+    _INFERRED[normalized] = inst
+    while len(_INFERRED) > _INFERRED_LIMIT:
+        _INFERRED.popitem(last=False)
     return inst
 
 
