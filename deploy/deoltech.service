@@ -1,0 +1,48 @@
+# systemd unit for a bare-metal or VM install (no Docker).
+#
+#   sudo useradd --system --home /opt/deoltech --shell /usr/sbin/nologin deoltech
+#   sudo mkdir -p /opt/deoltech /var/lib/deoltech
+#   sudo cp -r src /opt/deoltech/
+#   sudo chown -R deoltech:deoltech /opt/deoltech /var/lib/deoltech
+#   sudo cp deploy/deoltech.service /etc/systemd/system/
+#   sudo systemctl enable --now deoltech
+#   sudo -u deoltech PYTHONPATH=/opt/deoltech/src DEOLTECH_DB=/var/lib/deoltech/deoltech.db \
+#        python3 -m deoltech admin create
+
+[Unit]
+Description=Deol Tech paper trading platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deoltech
+Group=deoltech
+WorkingDirectory=/opt/deoltech
+Environment=PYTHONPATH=/opt/deoltech/src
+Environment=PYTHONUNBUFFERED=1
+Environment=DEOLTECH_DB=/var/lib/deoltech/deoltech.db
+EnvironmentFile=-/etc/deoltech.env
+ExecStart=/usr/bin/python3 -m deoltech serve --host 127.0.0.1 --port 8000 \
+          --trust-proxy --secure-cookies
+Restart=always
+RestartSec=5
+
+# Hardening. The process needs to read its source and write one directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/deoltech
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

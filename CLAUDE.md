@@ -1,8 +1,14 @@
 # Working in this repo
 
-Two independent tools live here: `revops` (revenue tracking for the content
-studio) and `pmpaper` (a Polymarket paper-trading harness). They share only
-the repo and the stdlib-only rule — do not couple them.
+This repository holds **three unrelated products**. Read the section for the
+one you are touching; their constraints differ in places. They share only the
+repo and the stdlib-only rule — do not couple them.
+
+- **`src/revops/`** — the revenue tracker described in the next section.
+- **`src/deoltech/`** — Deol Tech, a paper trading platform for stocks, crypto
+  and forex. See "Deol Tech" below and `docs/DEOLTECH.md`.
+- **`src/pmpaper/`** — a Polymarket paper-trading harness. See "pmpaper" below
+  and `docs/POLYMARKET.md`.
 
 ## revops
 
@@ -53,7 +59,109 @@ python3 -m unittest discover -s tests -v   # tests
 
 Tests set `REVOPS_DB` to a temp path — never let a test touch `data/revops.db`.
 
-## pmpaper
+
+---
+
+# Deol Tech (`src/deoltech/`)
+
+A paper trading platform for stocks, crypto and forex. Live market data from
+Finviz, a matching engine that models real execution costs, and a multi-user web
+app with administrator accounts. Full documentation is in `docs/DEOLTECH.md`;
+read it before changing engine behaviour.
+
+## Constraints
+
+- **Stdlib only**, same as revops. Python 3.11, SQLite, no requirements file.
+  The web app is `http.server`; the UI has no build step.
+- **Local-first.** Real data lives in `data/deoltech.db`, which is gitignored.
+- **Tests never touch the network or the real database.** `setUpModule` points
+  `DEOLTECH_DB` at a temp file; market-data tests use the deterministic feed or
+  recorded Finviz fixtures. Do not add a test that fetches from finviz.com.
+
+## The rules that must not be relaxed
+
+These are the difference between a simulator that teaches and one that flatters.
+Each has a test written so the optimistic implementation fails it.
+
+- **Stops gap through.** An elected stop fills at the market, not at the stop
+  price. `matching.match_bar` takes the *worse* of the stop and the bar's open.
+- **No lookahead.** A signal from a bar's close fills at the next bar's open.
+  The backtest loop in `backtest.py` matches orders *before* showing the
+  strategy the bar; do not reorder those steps. The backtester's broker runs
+  with `defer_matching=True` so `submit()` never fills on the spot — keep it.
+  A trailing stop on a bar is tested against the stop in force *before* the
+  bar's extreme ratchets it.
+- **A flip through zero is not a reduce.** `RiskEngine.check` splits every
+  order into a closing leg and an opening leg; each check sees the opening
+  leg. Long 1, sell 2,000 is a 1,999-share short and must fund itself.
+- **Limits fill at the limit**, never at the bar's favourable extreme.
+- **Resting limits need the market to trade through them**, and fill as makers
+  at their own price.
+- **Costs are always charged** — spread, slippage, commission, regulatory fees,
+  swap, borrow. A backtest with fees switched off is not a result. Financing
+  settles every weekday 17:00 ET roll exactly once (`_accrue_financing`
+  catches up from the ledger after a restart) and reaches the report through
+  `analyze(..., financing=financing_from_ledger(ledger))`; a report built from
+  fills alone silently omits it.
+- **Symbols are validated at the boundary.** `resolve()` never raises, so the
+  web layer must refuse junk first (`is_valid_symbol`, `api._symbol`).
+  Inferred specs go in the bounded `_INFERRED` cache, never into `_CATALOG`.
+- **A refused replacement leaves the original working.** `PaperBroker.replace`
+  risk-checks the successor before cancelling; keep that order of operations.
+- **Median beside mean, always.** Same house rule as revops: trade P&L is
+  fat-tailed. `MIN_TRADES = 20` gates per-trade statistics, and annualized
+  figures are suppressed under 30 days of history.
+- **Never invent a price.** Finviz parsers raise `ParseError` when no known
+  response shape matches. Do not add a fallback that guesses.
+- **Degrade visibly.** When the live feed fails the platform serves simulated
+  prices and says so in the UI, the health endpoint and the admin console. Never
+  present a simulated or stale price as live.
+
+## Web security invariants
+
+- **No inline event handlers or styles.** The CSP has no `unsafe-inline`, so an
+  `onclick=` or `style=` attribute is not merely unfashionable — it is dead
+  code the browser refuses to run. Bind behaviour with `data-confirm` /
+  `data-autosubmit` and the delegated listeners in `assets.py`. A test asserts
+  no rendered page contains one.
+- **Credentials never enter a URL.** Use `web/flash.py`, not `?ok=`. A secret
+  in a query string is a secret in the access log and the browser history.
+- **CSV cells go through `csv_safe()`.** User-supplied text (tags, notes) can
+  start with `=`, `+`, `-` or `@`; unprefixed it is a formula in Excel.
+- **Anything reaching a header is sanitized.** `http.server` does no CRLF
+  filtering at all. Redirect targets go through `safe_redirect_target()`.
+- **API token scopes are enforced**, intersected with the owner's role, in
+  `User.permissions`. Storing a scope without enforcing it is worse than not
+  offering one.
+
+## Units and currency, where the bugs live
+
+- `Instrument.adv` is in **tradeable units** (shares/coins/base currency), not
+  dollars. The impact model divides an order quantity by it.
+- `Instrument.notional()` is in the instrument's **quote currency**. Anything
+  derived from it — crypto exchange fees, FX swap — must be converted to the
+  account currency before it reaches `FeeBreakdown`. A long 100k USD/JPY earns
+  about $10/day of carry; skipping the conversion reports ¥1,572.
+- Concentration limits are measured on **margin**, not notional. Measuring
+  notional makes an ordinary 100k EUR/USD position read as 1,085% of a $10k
+  account.
+- The broker takes its time from `self.clock`, never the wall clock. The
+  backtester points it at the bar being processed.
+
+## Running things
+
+```bash
+export PYTHONPATH=src
+python3 -m deoltech admin create        # first administrator
+python3 -m deoltech serve               # http://127.0.0.1:8000
+python3 -m deoltech probe               # is Finviz reachable and parsing?
+python3 -m deoltech demo                # seed a demo account from replayed history
+python3 -m unittest discover -s tests   # 274 tests across all three products
+```
+
+---
+
+# pmpaper (`src/pmpaper/`)
 
 A paper-trading harness for Polymarket binaries (`src/pmpaper/`, docs in
 `docs/POLYMARKET.md`). Its purpose is to *refuse* to confirm edges that

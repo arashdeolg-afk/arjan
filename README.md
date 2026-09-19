@@ -1,3 +1,23 @@
+# arjan
+
+Two independent products live in this repository.
+
+| | What it is | Docs |
+|---|---|---|
+| **[Deol Tech](docs/DEOLTECH.md)** | Paper trading platform for stocks, crypto and forex. Live Finviz market data, a matching engine that models real execution costs, multi-user web app with administrator accounts. | [docs/DEOLTECH.md](docs/DEOLTECH.md) |
+| **revops** | Revenue tracker for the AI-content studio: what earned, what didn't, what's unlocked but unused. | [docs/PLAYBOOK.md](docs/PLAYBOOK.md) |
+
+They share nothing but a repository and a house style — standard library only,
+SQLite, median over mean, and no confident-looking number on a sample too small
+to support it.
+
+```bash
+PYTHONPATH=src python3 -m deoltech serve    # Deol Tech, at http://127.0.0.1:8000
+PYTHONPATH=src python3 -m revops today      # revops daily brief
+```
+
+---
+
 # revops — revenue operating system for an AI-content studio
 
 A local-first tracker that answers three questions honestly:
